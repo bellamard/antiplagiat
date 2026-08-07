@@ -27,7 +27,9 @@ public class Users {
     private String phoneNumber;
     private String firstName;
     private String lastName;
-    private String role;
+    private String surname;
+    @OneToOne(cascade = CascadeType.ALL)
+    private Roles role;
     private LocalDate dateOfBirth;
     @Column(nullable = false)
     private LocalDateTime createdAt;
