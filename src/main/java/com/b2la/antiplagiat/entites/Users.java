@@ -3,6 +3,7 @@ package com.b2la.antiplagiat.entites;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.CreationTimestamp;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -44,7 +45,7 @@ public class Users {
     private Roles role;
 
     private LocalDate dateOfBirth;
-
+    @CreationTimestamp
     @Column(nullable = false)
     private LocalDateTime createdAt;
 }
