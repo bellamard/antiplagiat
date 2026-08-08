@@ -1,9 +1,10 @@
 package com.b2la.antiplagiat.entites;
 
+import com.b2la.antiplagiat.enumerote.StatusEnum;
 import jakarta.persistence.*;
 import lombok.*;
 
-import java.util.UUID;
+
 
 @Entity
 @Getter
@@ -14,8 +15,10 @@ import java.util.UUID;
 @Table(name = "status")
 public class Status {
     @Id
-    @GeneratedValue
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private int id;
+
     @Enumerated(EnumType.STRING)
-    private String libelle;
+    @Column(name = "libelle", nullable = false)
+    private StatusEnum libelle;
 }

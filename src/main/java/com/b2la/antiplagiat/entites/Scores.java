@@ -33,6 +33,7 @@ public class Scores {
     @JoinColumn(name = "user_id", nullable = false)
     private Users user;
 
+    @ManyToOne
     @JoinColumn(name = "status_id", nullable = false)
     private Status status;
 
