@@ -1,0 +1,60 @@
+{
+  "info": {
+    "name": "antiplagiat-api",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Subscriptions",
+      "item": [
+        {
+          "name": "Create Subscription",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"FREE\",\n  \"startAt\": null,\n  \"endAt\": null\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/subscriptions", "host": ["{{baseUrl}}"], "path": ["api","subscriptions"] }
+          }
+        },
+        {
+          "name": "List Subscriptions",
+          "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/subscriptions", "host": ["{{baseUrl}}"], "path": ["api","subscriptions"] } }
+        }
+      ]
+    },
+    {
+      "name": "Histories",
+      "item": [
+        {
+          "name": "Create History",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {"mode":"raw","raw":"{\n  \"documentId\": \"<document-uuid>\",\n  \"overallScore\": 80.5,\n  \"aiScore\": 10.0,\n  \"details\": \"{\\\"matches\\\":[]}\"\n}"},
+            "url": { "raw": "{{baseUrl}}/api/histories", "host": ["{{baseUrl}}"], "path": ["api","histories"] }
+          }
+        },
+        { "name": "List Histories", "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/histories", "host": ["{{baseUrl}}"], "path": ["api","histories"] } } }
+      ]
+    },
+    {
+      "name": "Reports",
+      "item": [
+        {
+          "name": "Generate Report",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {"mode":"raw","raw":"{\n  \"analysisId\": \"<analysis-uuid>\"\n}"},
+            "url": { "raw": "{{baseUrl}}/api/reports", "host": ["{{baseUrl}}"], "path": ["api","reports"] }
+          }
+        },
+        { "name": "List Reports", "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/reports", "host": ["{{baseUrl}}"], "path": ["api","reports"] } } }
+      ]
+    }
+  ],
+  "variable": [{ "key": "baseUrl", "value": "http://localhost:8080" }]
+}
