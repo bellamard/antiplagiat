@@ -202,8 +202,43 @@ def analyze_text(text: str):
 
 if __name__ == '__main__':
     try:
-        text = sys.stdin.read()
-        result = analyze_text(text)
-        print(json.dumps(result))
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--text', help='Text input (alternative to stdin)')
+        args, _ = parser.parse_known_args()
+
+        body = ''
+        # read from stdin if piped
+        try:
+            if not sys.stdin.isatty():
+                body = sys.stdin.read()
+        except Exception:
+            body = ''
+
+        text = None
+        # priority: --text, then JSON with {"text":...}, then raw body
+        if args.text:
+            text = args.text
+        elif body:
+            try:
+                parsed = json.loads(body)
+                if isinstance(parsed, dict) and 'text' in parsed:
+                    text = parsed['text']
+                elif isinstance(parsed, str):
+                    text = parsed
+                else:
+                    # fallback to raw body string
+                    text = body
+            except Exception:
+                text = body
+
+        if not text or not str(text).strip():
+            resp = {'overallScore': 0, 'aiScore': 0, 'details': {'error': 'empty input'}}
+            print(json.dumps(resp, ensure_ascii=False))
+            sys.exit(0)
+
+        result = analyze_text(str(text))
+        print(json.dumps(result, ensure_ascii=False))
     except Exception as e:
-        print(json.dumps({'overallScore': 0, 'aiScore': 0, 'details': {'error': str(e)}}))
+        print(json.dumps({'overallScore': 0, 'aiScore': 0, 'details': {'error': str(e)}}), ensure_ascii=False)
+        sys.exit(1)
