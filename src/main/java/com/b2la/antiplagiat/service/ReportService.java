@@ -27,7 +27,7 @@ public class ReportService {
 
     public ReportResponseDTO generateReport(ReportRequestDTO req, String username) {
         AnalysisHistory history = historyRepository.findById(req.analysisId()).orElseThrow(() -> new EntityNotFoundException("Analyse introuvable"));
-        if (!history.getUser().getUsername().equals(username)) throw new SecurityException("Accès refusé");
+        if (!history.getUser().getUsername().equals(username) && !com.b2la.antiplagiat.util.SecurityUtils.isCurrentUserAdmin()) throw new SecurityException("Accès refusé");
 
         // simple JSON content
         String content = String.format("{\"analysisId\":\"%s\",\"documentId\":\"%s\",\"overallScore\":%s,\"aiScore\":%s,\"details\":%s}",
@@ -45,6 +45,9 @@ public class ReportService {
     }
 
     public List<ReportResponseDTO> getReports(String username) {
+        if (com.b2la.antiplagiat.util.SecurityUtils.isCurrentUserAdmin()) {
+            return reportRepository.findAll().stream().map(this::toResponse).toList();
+        }
         return reportRepository.findAll().stream()
                 .filter(r -> r.getUser() != null && r.getUser().getUsername().equals(username))
                 .map(this::toResponse)
@@ -53,7 +56,7 @@ public class ReportService {
 
     public ReportResponseDTO getReport(UUID id, String username) {
         Report r = reportRepository.findById(id).orElseThrow(() -> new EntityNotFoundException("Rapport introuvable"));
-        if (!r.getUser().getUsername().equals(username)) throw new SecurityException("Accès refusé");
+        if (!r.getUser().getUsername().equals(username) && !com.b2la.antiplagiat.util.SecurityUtils.isCurrentUserAdmin()) throw new SecurityException("Accès refusé");
         return toResponse(r);
     }
 

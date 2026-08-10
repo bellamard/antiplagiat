@@ -23,22 +23,28 @@ public class AnalysisHistoryService {
     private final DocumentsRespository documentsRespository;
     private final UsersRepository usersRepository;
 
-    public AnalysisHistoryService(AnalysisHistoryRepository historyRepository, DocumentsRespository documentsRespository, UsersRepository usersRepository) {
+    private final AnalysisEngineService analysisEngineService;
+
+    public AnalysisHistoryService(AnalysisHistoryRepository historyRepository, DocumentsRespository documentsRespository, UsersRepository usersRepository, AnalysisEngineService analysisEngineService) {
         this.historyRepository = historyRepository;
         this.documentsRespository = documentsRespository;
         this.usersRepository = usersRepository;
+        this.analysisEngineService = analysisEngineService;
     }
 
     public AnalysisHistoryResponseDTO createHistory(AnalysisHistoryRequestDTO req, String username) {
         Document doc = documentsRespository.findById(req.documentId()).orElseThrow(() -> new EntityNotFoundException("Document introuvable"));
         Users user = usersRepository.findByUsername(username).orElseThrow(() -> new EntityNotFoundException("Utilisateur introuvable"));
 
+        // analyze document using Tika + external Python AI analyzer (fallbacks included)
+        AnalysisResult result = analysisEngineService.analyze(doc);
+
         AnalysisHistory h = AnalysisHistory.builder()
                 .document(doc)
                 .user(user)
-                .overallScore(req.overallScore())
-                .aiScore(req.aiScore())
-                .details(req.details())
+                .overallScore(result.getOverallScore())
+                .aiScore(result.getAiScore())
+                .details(result.getDetails())
                 .build();
 
         return toResponse(historyRepository.save(h));
@@ -51,7 +57,7 @@ public class AnalysisHistoryService {
 
     public AnalysisHistoryResponseDTO getHistory(UUID id, String username) {
         AnalysisHistory h = historyRepository.findById(id).orElseThrow(() -> new EntityNotFoundException("Historique introuvable"));
-        if (!h.getUser().getUsername().equals(username)) throw new SecurityException("Accès refusé");
+        if (!h.getUser().getUsername().equals(username) && !com.b2la.antiplagiat.util.SecurityUtils.isCurrentUserAdmin()) throw new SecurityException("Accès refusé");
         return toResponse(h);
     }
 
