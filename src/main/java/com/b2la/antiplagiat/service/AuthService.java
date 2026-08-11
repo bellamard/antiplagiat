@@ -22,6 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class AuthService {
 
     private static final int TWO_FACTOR_EXPIRATION_MINUTES = 10;
+    private static final int TWO_FACTOR_GRACE_SECONDS = 30; // allow small network delays
 
     private final UsersRepository usersRepository;
     private final BCryptPasswordEncoder passwordEncoder;
@@ -46,7 +47,7 @@ public class AuthService {
     }
 
     public TwoFactorStartResponseDTO startLogin(LoginRequestDTO request) {
-        Users user = findByIdentifier(request.identifier());
+        Users user = findByIdentifier(request.resolvedIdentifier());
 
         if (request.password() == null || !passwordEncoder.matches(request.password(), user.getPassword())) {
             throw new IllegalArgumentException("Identifiants invalides");
@@ -61,8 +62,27 @@ public class AuthService {
     }
 
     public AuthResponseDTO verifyLogin(TwoFactorVerifyDTO request) {
-        Users user = findByIdentifier(request.identifier());
-        TwoFactorCode twoFactorCode = pendingCodes.get(user.getUsername());
+        String resolved = request.resolvedIdentifier();
+        Users user = null;
+        TwoFactorCode twoFactorCode = null;
+
+        if (resolved != null && !resolved.isBlank()) {
+            user = findByIdentifier(resolved);
+            twoFactorCode = pendingCodes.get(user.getUsername());
+        } else {
+            // try to find pending code by code value (frontend may only send code)
+            var found = pendingCodes.entrySet().stream()
+                    .filter(e -> e.getValue().code().equals(request.code()))
+                    .findFirst();
+            if (found.isPresent()) {
+                String username = found.get().getKey();
+                twoFactorCode = found.get().getValue();
+                user = usersRepository.findByUsername(username)
+                        .orElseThrow(() -> new IllegalArgumentException("Identifiants invalides"));
+            } else {
+                throw new IllegalArgumentException("Identifiant obligatoire");
+            }
+        }
 
         if (twoFactorCode == null || twoFactorCode.isExpired() || !twoFactorCode.code().equals(request.code())) {
             throw new IllegalArgumentException("Code de vérification invalide ou expiré");
@@ -85,6 +105,7 @@ public class AuthService {
 
         return usersRepository.findByUsername(identifier)
                 .or(() -> usersRepository.findByEmail(identifier))
+                .or(() -> usersRepository.findByPhoneNumber(identifier))
                 .orElseThrow(() -> new IllegalArgumentException("Identifiants invalides"));
     }
 
@@ -94,7 +115,7 @@ public class AuthService {
 
     private record TwoFactorCode(String code, Instant expiresAt) {
         private boolean isExpired() {
-            return Instant.now().isAfter(expiresAt);
+            return Instant.now().isAfter(expiresAt.plusSeconds(TWO_FACTOR_GRACE_SECONDS));
         }
     }
 }

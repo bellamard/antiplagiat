@@ -1,0 +1,159 @@
+{
+  "info": {
+    "_postman_id": "antiplagiat-collection-auth-0001",
+    "name": "antiplagiat API (with auth)",
+    "description": "Collection Postman générée pour antiplagiat. Inclut Auth (login+verify) qui stocke le JWT dans les variables de collection.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [ { "key": "token", "value": "{{access_token}}", "type": "string" } ]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "access_token", "value": "" },
+    { "key": "access_token_expires_at", "value": "" },
+    { "key": "identifier", "value": "" },
+    { "key": "user_id", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login (start)",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": { "raw": "{{baseUrl}}/api/users/login", "host": ["{{baseUrl}}"], "path": ["api","users","login"] },
+            "body": { "mode": "raw", "raw": "{\n  \"username\": \"{{user_id}}\"\n}" },
+            "auth": { "type": "noauth" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Login started', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.identifier) {",
+                  "  pm.collectionVariables.set('identifier', json.data.identifier);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify (get token)",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": { "raw": "{{baseUrl}}/api/users/login/verify", "host": ["{{baseUrl}}"], "path": ["api","users","login","verify"] },
+            "body": { "mode": "raw", "raw": "{\n  \"identifier\": \"{{identifier}}\",\n  \"code\": \"123456\",\n  \"username\": \"{{user_id}}\"\n}" },
+            "auth": { "type": "noauth" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Verify succeeded', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('Response contains token', () => {",
+                  "  pm.expect(json.data).to.be.an('object');",
+                  "  pm.expect(json.data.token).to.be.a('string').and.not.empty;",
+                  "});",
+                  "if (json.data && json.data.token) {",
+                  "  pm.collectionVariables.set('access_token', json.data.token);",
+                  "  if (json.data.expiresAt) pm.collectionVariables.set('access_token_expires_at', json.data.expiresAt);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Documents",
+      "item": [
+        {
+          "name": "Upload Document",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/documents", "host": ["{{baseUrl}}"], "path": ["api","documents"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": "" },
+                { "key": "name", "value": "Sample Document", "type": "text" },
+                { "key": "faculty", "value": "Science", "type": "text" },
+                { "key": "department", "value": "CS", "type": "text" },
+                { "key": "author", "value": "Author Name", "type": "text" },
+                { "key": "yearOfAcademic", "value": "2026", "type": "text" },
+                { "key": "matriculation", "value": "12345", "type": "text" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Documents",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/documents", "host": ["{{baseUrl}}"], "path": ["api","documents"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Subscriptions",
+      "item": [
+        {
+          "name": "Create Subscription",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"type\": \"FREE\",\n  \"startAt\": null,\n  \"endAt\": null\n}\n" },
+            "url": { "raw": "{{baseUrl}}/api/subscriptions", "host": ["{{baseUrl}}"], "path": ["api","subscriptions"] }
+          }
+        },
+        { "name": "List Subscriptions", "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/subscriptions", "host": ["{{baseUrl}}"], "path": ["api","subscriptions"] } } }
+      ]
+    },
+    {
+      "name": "Histories",
+      "item": [
+        {
+          "name": "Create History",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"documentId\": \"<document-uuid>\",\n  \"overallScore\": 80.5,\n  \"aiScore\": 10.0,\n  \"details\": \"{\\\"matches\\\":[]}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/histories", "host": ["{{baseUrl}}"], "path": ["api","histories"] }
+          }
+        },
+        { "name": "List Histories", "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/histories", "host": ["{{baseUrl}}"], "path": ["api","histories"] } } }
+      ]
+    },
+    {
+      "name": "Reports",
+      "item": [
+        {
+          "name": "Generate Report",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"analysisId\": \"<analysis-uuid>\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/reports", "host": ["{{baseUrl}}"], "path": ["api","reports"] }
+          }
+        },
+        { "name": "List Reports", "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/reports", "host": ["{{baseUrl}}"], "path": ["api","reports"] } } }
+      ]
+    }
+  ]
+}

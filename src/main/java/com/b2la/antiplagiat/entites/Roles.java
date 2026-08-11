@@ -13,7 +13,7 @@ import lombok.*;
 @Builder
 public class Roles {
     @Id
-    @GeneratedValue
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private int id;
     @Enumerated(EnumType.STRING)
     private Role libelle;

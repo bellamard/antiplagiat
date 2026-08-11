@@ -40,14 +40,17 @@ public class ScoresService {
 
         Document document = findDocument(request.documentId());
 
-        Scores score = Scores.builder()
-                .document(document)
-                .user(document.getUser())
-                .overallScore(request.overallScore())
-                .aiScore(request.aiScore())
-                .build();
+        // Only allow updating existing score: manual creation is forbidden — enforce centralization via AnalysisHistory
+        if (scoresRepository.existsByDocument(document)) {
+            Scores existing = scoresRepository.findFirstByDocumentOrderByCreatedAtDesc(document)
+                    .orElseThrow(() -> new IllegalStateException("Aucun score existant trouvé pour mise à jour"));
+            existing.setOverallScore(request.overallScore());
+            existing.setAiScore(request.aiScore());
+            return toResponse(scoresRepository.save(existing));
+        }
 
-        return toResponse(scoresRepository.save(score));
+        // If no score exists yet for this document, reject manual creation
+        throw new IllegalStateException("Création manuelle de scores interdite. Déclenchez une analyse via /api/histories pour générer le score.");
     }
 
     public List<ScoreResponseDTO> getScores(String username) {

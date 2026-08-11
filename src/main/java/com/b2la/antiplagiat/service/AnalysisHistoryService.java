@@ -24,12 +24,14 @@ public class AnalysisHistoryService {
     private final UsersRepository usersRepository;
 
     private final AnalysisEngineService analysisEngineService;
+    private final com.b2la.antiplagiat.repository.ScoresRepository scoresRepository;
 
-    public AnalysisHistoryService(AnalysisHistoryRepository historyRepository, DocumentsRespository documentsRespository, UsersRepository usersRepository, AnalysisEngineService analysisEngineService) {
+    public AnalysisHistoryService(AnalysisHistoryRepository historyRepository, DocumentsRespository documentsRespository, UsersRepository usersRepository, AnalysisEngineService analysisEngineService, com.b2la.antiplagiat.repository.ScoresRepository scoresRepository) {
         this.historyRepository = historyRepository;
         this.documentsRespository = documentsRespository;
         this.usersRepository = usersRepository;
         this.analysisEngineService = analysisEngineService;
+        this.scoresRepository = scoresRepository;
     }
 
     public AnalysisHistoryResponseDTO createHistory(AnalysisHistoryRequestDTO req, String username) {
@@ -47,7 +49,31 @@ public class AnalysisHistoryService {
                 .details(result.getDetails())
                 .build();
 
-        return toResponse(historyRepository.save(h));
+        AnalysisHistory saved = historyRepository.save(h);
+
+        // synchronize Scores: create or update latest score for the document to avoid duplicates/incoherences
+        try {
+            // if a score exists for this document, update the latest one
+            if (scoresRepository.existsByDocument(doc)) {
+                scoresRepository.findFirstByDocumentOrderByCreatedAtDesc(doc).ifPresent(s -> {
+                    s.setOverallScore(result.getOverallScore());
+                    s.setAiScore(result.getAiScore());
+                    scoresRepository.save(s);
+                });
+            } else {
+                com.b2la.antiplagiat.entites.Scores newScore = com.b2la.antiplagiat.entites.Scores.builder()
+                        .document(doc)
+                        .user(user)
+                        .overallScore(result.getOverallScore())
+                        .aiScore(result.getAiScore())
+                        .build();
+                scoresRepository.save(newScore);
+            }
+        } catch (Exception ex) {
+            // don't fail analysis creation because of score sync issues; log in future
+        }
+
+        return toResponse(saved);
     }
 
     public List<AnalysisHistoryResponseDTO> getHistories(String username) {
