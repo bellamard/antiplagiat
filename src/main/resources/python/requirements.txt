@@ -4,3 +4,8 @@ scikit-learn
 spacy
 numpy
 rapidfuzz
+pillow
+pytesseract
+paddleocr
+psycopg2-binary
+PyMuPDF
