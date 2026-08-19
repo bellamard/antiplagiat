@@ -6,9 +6,11 @@ import com.b2la.antiplagiat.entites.Users;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface AnalysisHistoryRepository extends JpaRepository<AnalysisHistory, UUID> {
     List<AnalysisHistory> findByUser(Users user);
     List<AnalysisHistory> findByDocument(Document document);
+    Optional<AnalysisHistory> findFirstByDocumentOrderByCreatedAtDesc(Document document);
 }
