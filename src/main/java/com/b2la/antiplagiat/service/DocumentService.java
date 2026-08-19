@@ -67,7 +67,7 @@ public class DocumentService {
             ScoresRepository scoresRepository,
             StatusRepository statusRepository,
             @Value("${app.documents.storage-dir:uploads/documents}") String storageDirectory,
-            @Value("${app.documents.database-content-max-size-bytes:10485760}") long maxDatabaseBase64FileSize
+            @Value("${app.documents.database-content-max-size-bytes:0}") long maxDatabaseBase64FileSize
     ) {
         this.documentsRespository = documentsRespository;
         this.usersRepository = usersRepository;
@@ -123,7 +123,7 @@ public class DocumentService {
         boolean contentCompressed = false;
         long storedSize = 0;
 
-        if (fileSize <= maxDatabaseBase64FileSize) {
+        if (maxDatabaseBase64FileSize > 0 && fileSize <= maxDatabaseBase64FileSize) {
             compressedBase64Content = compressToBase64(destination);
             contentCompressed = true;
             storedSize = compressedBase64Content.length();
