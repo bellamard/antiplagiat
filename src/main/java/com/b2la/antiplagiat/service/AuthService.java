@@ -98,6 +98,18 @@ public class AuthService {
         );
     }
 
+    public AuthResponseDTO refresh(String username) {
+        Users user = usersRepository.findByUsername(username)
+                .orElseThrow(() -> new IllegalArgumentException("Utilisateur introuvable"));
+
+        return new AuthResponseDTO(
+                jwtService.generateToken(user),
+                "Bearer",
+                jwtService.getExpirationInstant(),
+                usersDTOMapper.apply(user)
+        );
+    }
+
     private Users findByIdentifier(String identifier) {
         if (identifier == null || identifier.isBlank()) {
             throw new IllegalArgumentException("Identifiant obligatoire");

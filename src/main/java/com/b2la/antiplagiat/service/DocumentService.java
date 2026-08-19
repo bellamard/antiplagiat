@@ -19,7 +19,6 @@ import jakarta.transaction.Transactional;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
-import org.springframework.core.io.ByteArrayResource;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
@@ -28,6 +27,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -57,6 +57,7 @@ public class DocumentService {
     private final ScoresRepository scoresRepository;
     private final StatusRepository statusRepository;
     private final Path storageDirectory;
+    private final long maxDatabaseBase64FileSize;
 
     public DocumentService(
             DocumentsRespository documentsRespository,
@@ -65,7 +66,8 @@ public class DocumentService {
             AnalysisHistoryRepository analysisHistoryRepository,
             ScoresRepository scoresRepository,
             StatusRepository statusRepository,
-            @Value("${app.documents.storage-dir:uploads/documents}") String storageDirectory
+            @Value("${app.documents.storage-dir:uploads/documents}") String storageDirectory,
+            @Value("${app.documents.database-content-max-size-bytes:10485760}") long maxDatabaseBase64FileSize
     ) {
         this.documentsRespository = documentsRespository;
         this.usersRepository = usersRepository;
@@ -74,6 +76,7 @@ public class DocumentService {
         this.scoresRepository = scoresRepository;
         this.statusRepository = statusRepository;
         this.storageDirectory = Paths.get(storageDirectory).toAbsolutePath().normalize();
+        this.maxDatabaseBase64FileSize = maxDatabaseBase64FileSize;
     }
 
     public DocumentResponseDTO uploadDocument(
@@ -106,8 +109,6 @@ public class DocumentService {
         String originalFileName = sanitizeFileName(file.getOriginalFilename());
         String extension = getExtension(originalFileName);
         String storedFileName = documentId + "." + extension;
-        byte[] fileBytes = file.getBytes();
-        String compressedBase64Content = compressToBase64(fileBytes);
         Path destination = storageDirectory.resolve(storedFileName).normalize();
 
         if (!destination.startsWith(storageDirectory)) {
@@ -115,7 +116,18 @@ public class DocumentService {
         }
 
         Files.createDirectories(storageDirectory);
-        Files.write(destination, fileBytes);
+        file.transferTo(destination);
+
+        long fileSize = Files.size(destination);
+        String compressedBase64Content = null;
+        boolean contentCompressed = false;
+        long storedSize = 0;
+
+        if (fileSize <= maxDatabaseBase64FileSize) {
+            compressedBase64Content = compressToBase64(destination);
+            contentCompressed = true;
+            storedSize = compressedBase64Content.length();
+        }
 
         Document document = Document.builder()
                 .id(documentId)
@@ -133,10 +145,10 @@ public class DocumentService {
                 .storedFileName(storedFileName)
                 .originalFileName(originalFileName)
                 .contentType(file.getContentType())
-                .fileSize(file.getSize())
+                .fileSize(fileSize)
                 .compressedBase64Content(compressedBase64Content)
-                .contentCompressed(true)
-                .storedSize(compressedBase64Content.length())
+                .contentCompressed(contentCompressed)
+                .storedSize(storedSize)
                 .build();
 
         Document savedDocument = documentsRespository.save(document);
@@ -149,16 +161,15 @@ public class DocumentService {
 
     public List<DocumentResponseDTO> getDocuments(String username) {
         if (isCurrentUserAdmin()) {
-            return documentsRespository.findAll()
+            return documentsRespository.findAllDocumentResponses()
                     .stream()
-                    .map(this::toResponse)
+                    .map(this::normalizeResponseDownloadUrl)
                     .toList();
         }
 
-        Users user = findUser(username);
-        return documentsRespository.findByUser(user)
+        return documentsRespository.findDocumentResponsesByUsername(username)
                 .stream()
-                .map(this::toResponse)
+                .map(this::normalizeResponseDownloadUrl)
                 .toList();
     }
 
@@ -172,26 +183,28 @@ public class DocumentService {
         Document document = findDocument(id);
         assertCanAccess(document, username);
 
+        Path filePath = storageDirectory.resolve(document.getStoredFileName()).normalize();
+
+        if (filePath.startsWith(storageDirectory) && Files.exists(filePath)) {
+            try {
+                return new UrlResource(filePath.toUri());
+            } catch (MalformedURLException exception) {
+                throw new IllegalArgumentException("Chemin de fichier invalide");
+            }
+        }
+
         if (document.getCompressedBase64Content() != null && !document.getCompressedBase64Content().isBlank()) {
             try {
-                byte[] bytes = decompressBase64(document.getCompressedBase64Content(), document.isContentCompressed());
-                return new ByteArrayResource(bytes);
+                Path temporaryDownloadFile = Files.createTempFile("antiplagiat-download-", tempFileSuffix(document));
+                Files.write(temporaryDownloadFile, decompressBase64(document.getCompressedBase64Content(), document.isContentCompressed()));
+                temporaryDownloadFile.toFile().deleteOnExit();
+                return new UrlResource(temporaryDownloadFile.toUri());
             } catch (IOException exception) {
                 throw new IllegalArgumentException("Contenu du document invalide");
             }
         }
 
-        Path filePath = storageDirectory.resolve(document.getStoredFileName()).normalize();
-
-        if (!filePath.startsWith(storageDirectory) || !Files.exists(filePath)) {
-            throw new EntityNotFoundException("Fichier introuvable");
-        }
-
-        try {
-            return new UrlResource(filePath.toUri());
-        } catch (MalformedURLException exception) {
-            throw new IllegalArgumentException("Chemin de fichier invalide");
-        }
+        throw new EntityNotFoundException("Fichier introuvable");
     }
 
     public Document getDocumentEntity(UUID id, String username) {
@@ -275,12 +288,13 @@ public class DocumentService {
         return fileName.substring(extensionIndex + 1).toLowerCase(Locale.ROOT);
     }
 
-    private String compressToBase64(byte[] bytes) throws IOException {
+    private String compressToBase64(Path filePath) throws IOException {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        try (GZIPOutputStream gzipOutputStream = new GZIPOutputStream(output)) {
-            gzipOutputStream.write(bytes);
+        try (InputStream inputStream = Files.newInputStream(filePath);
+             GZIPOutputStream gzipOutputStream = new GZIPOutputStream(Base64.getEncoder().wrap(output))) {
+            inputStream.transferTo(gzipOutputStream);
         }
-        return Base64.getEncoder().encodeToString(output.toByteArray());
+        return output.toString(java.nio.charset.StandardCharsets.ISO_8859_1);
     }
 
     public byte[] getDocumentBytes(Document document) throws IOException {
@@ -305,6 +319,20 @@ public class DocumentService {
         try (GZIPInputStream gzipInputStream = new GZIPInputStream(new ByteArrayInputStream(decoded))) {
             return gzipInputStream.readAllBytes();
         }
+    }
+
+    private String tempFileSuffix(Document document) {
+        String name = document.getOriginalFileName() != null ? document.getOriginalFileName() : document.getStoredFileName();
+        if (name == null) {
+            return ".bin";
+        }
+
+        int extensionIndex = name.lastIndexOf('.');
+        if (extensionIndex < 0 || extensionIndex == name.length() - 1) {
+            return ".bin";
+        }
+
+        return name.substring(extensionIndex);
     }
 
     private String downloadUrl(UUID documentId) {
@@ -379,6 +407,36 @@ public class DocumentService {
                 document.getOriginalFileName(),
                 document.getContentType(),
                 document.getFileSize()
+        );
+    }
+
+    private DocumentResponseDTO normalizeResponseDownloadUrl(DocumentResponseDTO document) {
+        String expectedUrl = downloadUrl(document.id());
+        String currentUrl = document.urlFile();
+
+        if (currentUrl != null
+                && !currentUrl.isBlank()
+                && !currentUrl.startsWith(PENDING_DOCUMENT_URL_PREFIX)) {
+            return document;
+        }
+
+        return new DocumentResponseDTO(
+                document.id(),
+                document.name(),
+                document.faculty(),
+                document.department(),
+                document.author(),
+                document.director(),
+                document.rapporteur(),
+                document.yearOfAcademic(),
+                document.academic(),
+                document.matriculation(),
+                document.creationDate(),
+                document.userId(),
+                expectedUrl,
+                document.originalFileName(),
+                document.contentType(),
+                document.fileSize()
         );
     }
 }

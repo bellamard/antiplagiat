@@ -55,14 +55,13 @@ public class ScoresService {
 
     public List<ScoreResponseDTO> getScores(String username) {
         if (isCurrentUserAdmin()) {
-            return scoresRepository.findAll()
+            return scoresRepository.findAllByOrderByCreatedAtDesc()
                     .stream()
                     .map(this::toResponse)
                     .toList();
         }
 
-        Users user = findUser(username);
-        return scoresRepository.findByUser(user)
+        return scoresRepository.findByUserUsernameOrderByCreatedAtDesc(username)
                 .stream()
                 .map(this::toResponse)
                 .toList();
@@ -78,7 +77,7 @@ public class ScoresService {
         Document document = findDocument(documentId);
         assertCanAccess(document, username);
 
-        return scoresRepository.findByDocument(document)
+        return scoresRepository.findByDocumentIdOrderByCreatedAtDesc(documentId)
                 .stream()
                 .map(this::toResponse)
                 .toList();
@@ -129,7 +128,7 @@ public class ScoresService {
     }
 
     private Scores findScore(UUID id) {
-        return scoresRepository.findById(id)
+        return scoresRepository.findByIdWithRelations(id)
                 .orElseThrow(() -> new EntityNotFoundException("Score introuvable"));
     }
 

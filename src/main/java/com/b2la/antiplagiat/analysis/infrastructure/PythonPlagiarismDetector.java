@@ -74,6 +74,9 @@ public class PythonPlagiarismDetector implements PlagiarismDetector {
     @Value("${analysis.ocr.workers:4}")
     private int ocrWorkers;
 
+    @Value("${analysis.text.max-chars:500000}")
+    private int maxExtractedTextChars;
+
     private CompletableFuture<String> readProcessOutput(InputStream inputStream) {
         return CompletableFuture.supplyAsync(() -> {
             try (inputStream) {
@@ -268,30 +271,36 @@ public class PythonPlagiarismDetector implements PlagiarismDetector {
         logger.info("Starting analysis for document id={} name={}", document.getId(), document.getName());
 
         String text = "";
-        byte[] documentBytes;
         // try to read stored file first
         File file = resolveDocumentFile(document);
+        Path analysisFilePath = file == null ? null : file.toPath().toAbsolutePath().normalize();
+        Path temporaryDocumentFile = null;
 
         try {
-            documentBytes = readDocumentBytes(document, file);
-            logger.debug("Reading document for analysis: id={} bytes={}", document.getId(), documentBytes.length);
-            try (InputStream is = new ByteArrayInputStream(documentBytes)) {
-                AutoDetectParser parser = new AutoDetectParser();
-                BodyContentHandler handler = new BodyContentHandler(-1);
+            if (analysisFilePath == null) {
+                byte[] documentBytes = readDocumentBytes(document, null);
+                temporaryDocumentFile = Files.createTempFile("antiplagiat-analysis-", tempFileSuffix(document));
+                Files.write(temporaryDocumentFile, documentBytes);
+                analysisFilePath = temporaryDocumentFile.toAbsolutePath().normalize();
+            }
+
+            logger.debug("Reading document for analysis: id={} file={}", document.getId(), analysisFilePath);
+            AutoDetectParser parser = new AutoDetectParser();
+            BodyContentHandler handler = new BodyContentHandler(Math.max(1, maxExtractedTextChars));
+            try (InputStream is = Files.newInputStream(analysisFilePath)) {
                 Metadata metadata = new Metadata();
                 parser.parse(is, handler, metadata, new ParseContext());
                 text = handler.toString();
                 logger.debug("Extracted text length: {}", text.length());
             } catch (Exception e) {
                 logger.warn("Failed to extract text from file: {}", e.getMessage());
-                text = "";
+                text = handler.toString();
             }
         } catch (IOException e) {
             return fallbackResult(text, "Document file not found");
         }
 
         // Call Python analyzer; support OCR for images and optional pgvector storage/query
-        Path temporaryOcrFile = null;
         try {
             logger.debug("Preparing python analyzer command: {} {}", pythonExecutable, pythonScriptPath);
             List<String> cmd = new ArrayList<>(Arrays.asList(pythonExecutable, pythonScriptPath));
@@ -300,14 +309,10 @@ public class PythonPlagiarismDetector implements PlagiarismDetector {
             boolean shouldRunOcrFallback = isImage || (isPdfDocument(document) && text.trim().length() < ocrMinTextLength);
 
             if (isImage) {
-                temporaryOcrFile = Files.createTempFile("antiplagiat-ocr-", tempFileSuffix(document));
-                Files.write(temporaryOcrFile, documentBytes);
-                cmd.addAll(Arrays.asList("--image", temporaryOcrFile.toAbsolutePath().toString()));
+                cmd.addAll(Arrays.asList("--image", analysisFilePath.toString()));
             } else if (shouldRunOcrFallback) {
-                temporaryOcrFile = Files.createTempFile("antiplagiat-ocr-", tempFileSuffix(document));
-                Files.write(temporaryOcrFile, documentBytes);
                 cmd.addAll(Arrays.asList(
-                        "--file", temporaryOcrFile.toAbsolutePath().toString(),
+                        "--file", analysisFilePath.toString(),
                         "--ocr",
                         "--ocr-max-pages", Integer.toString(Math.max(1, ocrMaxPages)),
                         "--ocr-workers", Integer.toString(Math.max(1, ocrWorkers))
@@ -373,11 +378,11 @@ public class PythonPlagiarismDetector implements PlagiarismDetector {
         } catch (Exception e) {
             logger.error("Error while running python analyzer: {}", e.getMessage(), e);
         } finally {
-            if (temporaryOcrFile != null) {
+            if (temporaryDocumentFile != null) {
                 try {
-                    Files.deleteIfExists(temporaryOcrFile);
+                    Files.deleteIfExists(temporaryDocumentFile);
                 } catch (IOException e) {
-                    logger.debug("Failed to delete OCR temp file {}: {}", temporaryOcrFile, e.getMessage());
+                    logger.debug("Failed to delete analysis temp file {}: {}", temporaryDocumentFile, e.getMessage());
                 }
             }
         }

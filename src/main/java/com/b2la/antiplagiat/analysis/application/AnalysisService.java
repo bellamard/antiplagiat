@@ -97,12 +97,21 @@ public class AnalysisService {
     }
 
     public List<AnalysisView> getHistories(String username) {
-        Users user = usersRepository.findByUsername(username).orElseThrow(() -> new EntityNotFoundException("Utilisateur introuvable"));
-        return historyRepository.findByUser(user).stream().map(this::toResponse).toList();
+        if (SecurityUtils.isCurrentUserAdmin()) {
+            return historyRepository.findAllByOrderByCreatedAtDesc()
+                    .stream()
+                    .map(this::toResponse)
+                    .toList();
+        }
+
+        return historyRepository.findByUserUsernameOrderByCreatedAtDesc(username)
+                .stream()
+                .map(this::toResponse)
+                .toList();
     }
 
     public AnalysisView getHistory(UUID id, String username) {
-        AnalysisHistory h = historyRepository.findById(id).orElseThrow(() -> new EntityNotFoundException("Historique introuvable"));
+        AnalysisHistory h = historyRepository.findByIdWithRelations(id).orElseThrow(() -> new EntityNotFoundException("Historique introuvable"));
         if (!h.getUser().getUsername().equals(username) && !SecurityUtils.isCurrentUserAdmin()) throw new SecurityException("Accès refusé");
         return toResponse(h);
     }
