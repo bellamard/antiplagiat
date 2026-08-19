@@ -11,6 +11,7 @@ import com.b2la.antiplagiat.service.AuthService;
 import com.b2la.antiplagiat.service.UsersService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -50,6 +51,11 @@ public class UsersController {
     @PostMapping("/login/verify")
     public ApiResponse<AuthResponseDTO> verifyLogin(@RequestBody TwoFactorVerifyDTO request) {
         return new ApiResponse<>("success", "Connexion réussie", authService.verifyLogin(request));
+    }
+
+    @PostMapping("/refresh")
+    public ApiResponse<AuthResponseDTO> refresh(Authentication authentication) {
+        return new ApiResponse<>("success", "Token renouvelé", authService.refresh(authentication.getName()));
     }
 
     @GetMapping
