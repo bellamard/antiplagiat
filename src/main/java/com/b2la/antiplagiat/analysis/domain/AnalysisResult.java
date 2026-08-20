@@ -1,4 +1,4 @@
-package com.b2la.antiplagiat.service;
+package com.b2la.antiplagiat.analysis.domain;
 
 public class AnalysisResult {
     private final double overallScore;

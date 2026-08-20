@@ -16,7 +16,6 @@ import java.util.UUID;
 @Table(name = "Document")
 public class Document {
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
     @Column(nullable = false)
@@ -64,4 +63,13 @@ public class Document {
 
     @Column(nullable = false)
     private long fileSize;
+
+    @Lob
+    @Basic(fetch = FetchType.LAZY)
+    @Column(columnDefinition = "TEXT")
+    private String compressedBase64Content;
+
+    private boolean contentCompressed;
+
+    private long storedSize;
 }

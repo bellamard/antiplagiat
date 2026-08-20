@@ -133,11 +133,57 @@
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"documentId\": \"<document-uuid>\",\n  \"overallScore\": 80.5,\n  \"aiScore\": 10.0,\n  \"details\": \"{\\\"matches\\\":[]}\"\n}" },
+            "body": { "mode": "raw", "raw": "{\n  \"matriculation\": \"<matriculation>\"\n}" },
             "url": { "raw": "{{baseUrl}}/api/histories", "host": ["{{baseUrl}}"], "path": ["api","histories"] }
           }
         },
         { "name": "List Histories", "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/histories", "host": ["{{baseUrl}}"], "path": ["api","histories"] } } }
+      ]
+    },
+    {
+      "name": "Scores",
+      "item": [
+        {
+          "name": "Create Score (forbidden - expect 409)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"documentId\": \"<document-uuid>\",\n  \"overallScore\": 75.0,\n  \"aiScore\": 12.0\n}" },
+            "url": { "raw": "{{baseUrl}}/api/scores", "host": ["{{baseUrl}}"], "path": ["api","scores"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Manual score creation forbidden', () => pm.response.to.have.status(409));",
+                  "const json = pm.response.json();",
+                  "pm.test('Error message explains to use /api/histories', () => {",
+                  "  pm.expect(json.message).to.include('Création manuelle de scores interdite');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Score",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"documentId\": \"<document-uuid>\",\n  \"overallScore\": 85.0,\n  \"aiScore\": 15.0\n}" },
+            "url": { "raw": "{{baseUrl}}/api/scores/{{score_id}}", "host": ["{{baseUrl}}"], "path": ["api","scores","{{score_id}}"] }
+          }
+        },
+        {
+          "name": "List Scores",
+          "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/scores", "host": ["{{baseUrl}}"], "path": ["api","scores"] } }
+        },
+        {
+          "name": "Get Scores By Document",
+          "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/scores/document/<document-uuid>", "host": ["{{baseUrl}}"], "path": ["api","scores","document","<document-uuid>"] } }
+        }
       ]
     },
     {

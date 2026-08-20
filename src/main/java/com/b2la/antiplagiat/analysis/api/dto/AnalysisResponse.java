@@ -1,9 +1,9 @@
-package com.b2la.antiplagiat.dto;
+package com.b2la.antiplagiat.analysis.api.dto;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
 
-public record AnalysisHistoryResponseDTO(
+public record AnalysisResponse(
         UUID id,
         UUID documentId,
         String documentName,

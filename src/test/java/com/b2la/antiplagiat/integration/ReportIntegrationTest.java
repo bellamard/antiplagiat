@@ -13,7 +13,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
@@ -49,8 +49,7 @@ public class ReportIntegrationTest {
     @Autowired
     ReportRepository reportRepository;
 
-    @Autowired
-    ObjectMapper mapper;
+    final ObjectMapper mapper = new ObjectMapper();
 
     Roles adminRole;
     Roles studentRole;
@@ -110,7 +109,7 @@ public class ReportIntegrationTest {
     public void ownerCanGenerateReport() throws Exception {
         // create analysis as owner via controller
         var doc = documentsRespository.findAll().get(0);
-        String body = mapper.writeValueAsString(new java.util.HashMap<>() {{ put("documentId", doc.getId()); }});
+        String body = mapper.writeValueAsString(java.util.Map.of("matriculation", doc.getMatriculation()));
 
         var res = mockMvc.perform(post("/api/histories")
                 .with(user(owner.getUsername()).roles("STUDENT"))
@@ -124,7 +123,7 @@ public class ReportIntegrationTest {
         String id = mapper.readTree(response).get("data").get("id").asText();
 
         // generate report
-        String reportBody = mapper.writeValueAsString(new java.util.HashMap<>() {{ put("analysisId", id); }});
+        String reportBody = mapper.writeValueAsString(java.util.Map.of("analysisId", id));
         mockMvc.perform(post("/api/reports")
                 .with(user(owner.getUsername()).roles("STUDENT"))
                 .contentType(MediaType.APPLICATION_JSON)
@@ -136,7 +135,7 @@ public class ReportIntegrationTest {
     public void otherCannotGenerateReport() throws Exception {
         var doc = documentsRespository.findAll().get(0);
         // create analysis as owner
-        String body = mapper.writeValueAsString(new java.util.HashMap<>() {{ put("documentId", doc.getId()); }});
+        String body = mapper.writeValueAsString(java.util.Map.of("matriculation", doc.getMatriculation()));
         var res = mockMvc.perform(post("/api/histories")
                 .with(user(owner.getUsername()).roles("STUDENT"))
                 .contentType(MediaType.APPLICATION_JSON)
@@ -146,7 +145,7 @@ public class ReportIntegrationTest {
         String response = res.getResponse().getContentAsString();
         String id = mapper.readTree(response).get("data").get("id").asText();
 
-        String reportBody = mapper.writeValueAsString(new java.util.HashMap<>() {{ put("analysisId", id); }});
+        String reportBody = mapper.writeValueAsString(java.util.Map.of("analysisId", id));
         mockMvc.perform(post("/api/reports")
                 .with(user(other.getUsername()).roles("STUDENT"))
                 .contentType(MediaType.APPLICATION_JSON)
@@ -157,7 +156,7 @@ public class ReportIntegrationTest {
     @Test
     public void adminCanAccessAnyReport() throws Exception {
         var doc = documentsRespository.findAll().get(0);
-        String body = mapper.writeValueAsString(new java.util.HashMap<>() {{ put("documentId", doc.getId()); }});
+        String body = mapper.writeValueAsString(java.util.Map.of("matriculation", doc.getMatriculation()));
         var res = mockMvc.perform(post("/api/histories")
                 .with(user(owner.getUsername()).roles("STUDENT"))
                 .contentType(MediaType.APPLICATION_JSON)
@@ -167,7 +166,7 @@ public class ReportIntegrationTest {
         String response = res.getResponse().getContentAsString();
         String id = mapper.readTree(response).get("data").get("id").asText();
 
-        String reportBody = mapper.writeValueAsString(new java.util.HashMap<>() {{ put("analysisId", id); }});
+        String reportBody = mapper.writeValueAsString(java.util.Map.of("analysisId", id));
         // admin can generate
         mockMvc.perform(post("/api/reports")
                 .with(user("admin").roles("ADMIN"))
