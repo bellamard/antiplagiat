@@ -74,10 +74,9 @@ public class ReportService {
 
     public List<ReportResponseDTO> getReports(String username) {
         if (com.b2la.antiplagiat.util.SecurityUtils.isCurrentUserAdmin()) {
-            return reportRepository.findAll().stream().map(this::toResponse).toList();
+            return reportRepository.findAllByOrderByCreatedAtDesc().stream().map(this::toResponse).toList();
         }
-        return reportRepository.findAll().stream()
-                .filter(r -> r.getUser() != null && r.getUser().getUsername().equals(username))
+        return reportRepository.findByUserUsernameOrderByCreatedAtDesc(username).stream()
                 .map(this::toResponse)
                 .toList();
     }
