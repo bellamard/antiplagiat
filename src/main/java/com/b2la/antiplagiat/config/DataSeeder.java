@@ -1,9 +1,12 @@
 package com.b2la.antiplagiat.config;
 
 import com.b2la.antiplagiat.entites.Roles;
+import com.b2la.antiplagiat.entites.Status;
 import com.b2la.antiplagiat.entites.Users;
 import com.b2la.antiplagiat.enumerote.Role;
+import com.b2la.antiplagiat.enumerote.StatusEnum;
 import com.b2la.antiplagiat.repository.RolesRepository;
+import com.b2la.antiplagiat.repository.StatusRepository;
 import com.b2la.antiplagiat.repository.UsersRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
@@ -20,19 +23,29 @@ public class DataSeeder implements CommandLineRunner {
 
     private final RolesRepository rolesRepository;
     private final UsersRepository usersRepository;
+    private final StatusRepository statusRepository;
     private final BCryptPasswordEncoder passwordEncoder;
     private final SeedProperties seedProperties;
 
     @Autowired
-    public DataSeeder(RolesRepository rolesRepository, UsersRepository usersRepository, BCryptPasswordEncoder passwordEncoder, SeedProperties seedProperties) {
+    public DataSeeder(
+            RolesRepository rolesRepository,
+            UsersRepository usersRepository,
+            StatusRepository statusRepository,
+            BCryptPasswordEncoder passwordEncoder,
+            SeedProperties seedProperties
+    ) {
         this.rolesRepository = rolesRepository;
         this.usersRepository = usersRepository;
+        this.statusRepository = statusRepository;
         this.passwordEncoder = passwordEncoder;
         this.seedProperties = seedProperties;
     }
 
     @Override
     public void run(String... args) throws Exception {
+        seedStatuses();
+
         // Seed roles from properties if provided
         if (seedProperties.getRoles() != null && !seedProperties.getRoles().isEmpty()) {
             // create missing roles only
@@ -80,6 +93,22 @@ public class DataSeeder implements CommandLineRunner {
                         .build();
                 usersRepository.save(user);
             }
+        }
+    }
+
+    private void seedStatuses() {
+        var existingStatuses = statusRepository.findAll()
+                .stream()
+                .map(Status::getLibelle)
+                .collect(java.util.stream.Collectors.toSet());
+
+        var missingStatuses = Arrays.stream(StatusEnum.values())
+                .filter(status -> !existingStatuses.contains(status))
+                .map(status -> Status.builder().libelle(status).build())
+                .toList();
+
+        if (!missingStatuses.isEmpty()) {
+            statusRepository.saveAll(missingStatuses);
         }
     }
 }

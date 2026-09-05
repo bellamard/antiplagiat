@@ -6,6 +6,9 @@ import com.b2la.antiplagiat.analysis.application.AnalysisView;
 import com.b2la.antiplagiat.entites.Document;
 import com.b2la.antiplagiat.entites.Users;
 import com.b2la.antiplagiat.repository.DocumentsRespository;
+import com.b2la.antiplagiat.repository.AnalysisHistoryRepository;
+import com.b2la.antiplagiat.repository.ReportRepository;
+import com.b2la.antiplagiat.repository.ScoresRepository;
 import com.b2la.antiplagiat.repository.UsersRepository;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.transaction.Transactional;
@@ -60,6 +63,9 @@ public class DocumentService {
 
     private final DocumentsRespository documentsRespository;
     private final UsersRepository usersRepository;
+    private final ReportRepository reportRepository;
+    private final ScoresRepository scoresRepository;
+    private final AnalysisHistoryRepository analysisHistoryRepository;
     private final AnalysisService analysisService;
     private final Tika tika = new Tika();
     private final Path storageDirectory;
@@ -68,12 +74,18 @@ public class DocumentService {
     public DocumentService(
             DocumentsRespository documentsRespository,
             UsersRepository usersRepository,
+            ReportRepository reportRepository,
+            ScoresRepository scoresRepository,
+            AnalysisHistoryRepository analysisHistoryRepository,
             AnalysisService analysisService,
             @Value("${app.documents.storage-dir:uploads/documents}") String storageDirectory,
             @Value("${app.documents.database-content-max-size-bytes:0}") long maxDatabaseBase64FileSize
     ) {
         this.documentsRespository = documentsRespository;
         this.usersRepository = usersRepository;
+        this.reportRepository = reportRepository;
+        this.scoresRepository = scoresRepository;
+        this.analysisHistoryRepository = analysisHistoryRepository;
         this.analysisService = analysisService;
         this.storageDirectory = Paths.get(storageDirectory).toAbsolutePath().normalize();
         this.maxDatabaseBase64FileSize = maxDatabaseBase64FileSize;
@@ -228,6 +240,9 @@ public class DocumentService {
         Document document = findDocument(id);
         assertCanAccess(document, username);
         Path filePath = storageDirectory.resolve(document.getStoredFileName()).normalize();
+        reportRepository.deleteByDocument(document);
+        scoresRepository.deleteByDocument(document);
+        analysisHistoryRepository.deleteByDocument(document);
         documentsRespository.delete(document);
 
         if (filePath.startsWith(storageDirectory)) {

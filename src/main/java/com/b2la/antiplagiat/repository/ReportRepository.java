@@ -1,6 +1,7 @@
 package com.b2la.antiplagiat.repository;
 
 import com.b2la.antiplagiat.entites.Report;
+import com.b2la.antiplagiat.entites.Document;
 import com.b2la.antiplagiat.entites.Users;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -16,4 +17,6 @@ public interface ReportRepository extends JpaRepository<Report, UUID> {
 
     @EntityGraph(attributePaths = {"analysis", "document", "user"})
     List<Report> findByUserUsernameOrderByCreatedAtDesc(String username);
+
+    void deleteByDocument(Document document);
 }

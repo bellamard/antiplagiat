@@ -33,4 +33,6 @@ public interface ScoresRepository extends JpaRepository<Scores, UUID> {
     Optional<Scores> findFirstByDocumentOrderByCreatedAtDesc(Document document);
 
     boolean existsByDocument(Document document);
+
+    void deleteByDocument(Document document);
 }

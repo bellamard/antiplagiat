@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.Collection;
+import java.time.LocalDateTime;
 
 public interface AnalysisHistoryRepository extends JpaRepository<AnalysisHistory, UUID> {
     List<AnalysisHistory> findByUser(Users user);
@@ -36,4 +37,8 @@ public interface AnalysisHistoryRepository extends JpaRepository<AnalysisHistory
             UUID documentId,
             Collection<StatusEnum> statuses
     );
+
+    List<AnalysisHistory> findByStatusLibelleAndStartedAtBefore(StatusEnum status, LocalDateTime startedAt);
+
+    void deleteByDocument(Document document);
 }
