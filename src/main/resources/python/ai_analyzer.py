@@ -33,7 +33,6 @@ import hashlib
 import os
 import warnings
 import contextlib
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 
 for stream in (sys.stdin, sys.stdout, sys.stderr):
@@ -48,6 +47,8 @@ DEFAULT_CHUNK_OVERLAP_SENTENCES = 1
 DEFAULT_OCR_MAX_PAGES = int(os.getenv("ANALYSIS_OCR_MAX_PAGES", "50"))
 DEFAULT_OCR_WORKERS = int(os.getenv("ANALYSIS_OCR_WORKERS", "2"))
 DEFAULT_OCR_LANGUAGES = os.getenv("ANALYSIS_OCR_LANGUAGES", "fra+eng")
+DEFAULT_OCR_MIN_SUCCESS_RATE = float(os.getenv("ANALYSIS_OCR_MIN_SUCCESS_RATE", "0.60"))
+DEFAULT_MIN_TEXT_LENGTH = int(os.getenv("ANALYSIS_MIN_TEXT_LENGTH", "80"))
 DEFAULT_SEMANTIC_MATCH_THRESHOLD = float(os.getenv("ANALYSIS_SEMANTIC_MATCH_THRESHOLD", "0.78"))
 USE_PADDLEOCR = os.getenv("ANALYSIS_USE_PADDLEOCR", "false").lower() in ("1", "true", "yes")
 
@@ -159,6 +160,15 @@ def paddle_language_from_tesseract(languages: str):
     if first in ('eng', 'en'):
         return 'en'
     return 'fr'
+
+
+def text_quality_score(text: str):
+    cleaned = clean_text(text)
+    if not cleaned:
+        return 0.0
+    alpha_num = sum(1 for char in cleaned if char.isalnum())
+    words = re.findall(r'\w+', cleaned, flags=re.UNICODE)
+    return min(1.0, (alpha_num / max(1, len(cleaned))) * 0.55 + min(1.0, len(words) / 120.0) * 0.45)
 
 
 def split_sentences(text: str):
@@ -370,54 +380,145 @@ def ocr_image(path_or_bytes, languages=DEFAULT_OCR_LANGUAGES):
     return ''
 
 
-def _ocr_pdf_page(path, page_index, zoom, languages):
+def ocr_image_with_metadata(path_or_bytes, languages=DEFAULT_OCR_LANGUAGES):
+    metadata = {
+        'engine': None,
+        'engine_version': None,
+        'languages_requested': parse_ocr_languages(languages),
+        'language_used': None,
+        'success': False,
+        'error': None
+    }
+
+    if HAS_TESSERACT and Image is not None:
+        try:
+            metadata['engine'] = 'tesseract'
+            try:
+                metadata['engine_version'] = str(pytesseract.get_tesseract_version())
+            except Exception:
+                metadata['engine_version'] = None
+
+            if isinstance(path_or_bytes, (bytes, bytearray)):
+                from io import BytesIO
+                img = Image.open(BytesIO(path_or_bytes))
+            else:
+                img = Image.open(path_or_bytes)
+
+            try:
+                for language in parse_ocr_languages(languages):
+                    try:
+                        text = pytesseract.image_to_string(img, lang=language)
+                        if text and clean_text(text):
+                            metadata['language_used'] = language
+                            metadata['success'] = True
+                            return text, metadata
+                    except Exception as exception:
+                        metadata['error'] = str(exception)
+                return '', metadata
+            finally:
+                img.close()
+        except Exception as exception:
+            metadata['error'] = str(exception)
+
+    if USE_PADDLEOCR and HAS_PADDLEOCR:
+        try:
+            metadata['engine'] = 'paddleocr'
+            metadata['language_used'] = paddle_language_from_tesseract(languages)
+            text = ocr_image(path_or_bytes, languages=languages)
+            metadata['success'] = bool(clean_text(text))
+            return text, metadata
+        except Exception as exception:
+            metadata['error'] = str(exception)
+
+    if metadata['error'] is None:
+        metadata['error'] = 'No OCR engine available'
+    return '', metadata
+
+
+def ocr_pdf(path, max_pages=DEFAULT_OCR_MAX_PAGES, zoom=2.0, workers=DEFAULT_OCR_WORKERS, languages=DEFAULT_OCR_LANGUAGES):
+    return ocr_pdf_with_metadata(path, max_pages=max_pages, zoom=zoom, workers=workers, languages=languages)[0]
+
+
+def ocr_pdf_with_metadata(path, max_pages=DEFAULT_OCR_MAX_PAGES, zoom=2.0, workers=DEFAULT_OCR_WORKERS, languages=DEFAULT_OCR_LANGUAGES):
+    """OCR a scanned PDF by rendering pages with PyMuPDF, if available."""
+    metadata = {
+        'engine': 'tesseract' if HAS_TESSERACT else ('paddleocr' if HAS_PADDLEOCR else None),
+        'engine_version': None,
+        'languages_requested': parse_ocr_languages(languages),
+        'max_pages': max_pages,
+        'workers': max(1, workers),
+        'pages_total': 0,
+        'pages_attempted': 0,
+        'pages_succeeded': 0,
+        'pages_failed': 0,
+        'page_errors': [],
+        'success_rate': 0.0
+    }
+    if not HAS_PYMUPDF:
+        metadata['page_errors'].append({'error': 'PyMuPDF not available'})
+        return '', metadata
+    if HAS_TESSERACT:
+        try:
+            metadata['engine_version'] = str(pytesseract.get_tesseract_version())
+        except Exception:
+            metadata['engine_version'] = None
+
     doc = None
     try:
         doc = fitz.open(path)
-        page = doc.load_page(page_index)
-        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
-        image_bytes = pix.tobytes("png")
-        return page_index, ocr_image(image_bytes, languages=languages)
+        metadata['pages_total'] = len(doc)
+        total_pages = min(len(doc), max(1, max_pages))
+
+        page_texts = {}
+        for page_index in range(total_pages):
+            metadata['pages_attempted'] += 1
+            try:
+                page = doc.load_page(page_index)
+                pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+                image_bytes = pix.tobytes("png")
+                del pix
+                page_text, page_meta = ocr_image_with_metadata(image_bytes, languages=languages)
+                if page_text:
+                    page_texts[page_index] = page_text
+                    metadata['pages_succeeded'] += 1
+                else:
+                    metadata['pages_failed'] += 1
+                    metadata['page_errors'].append({
+                        'page': page_index + 1,
+                        'error': page_meta.get('error') or 'empty OCR result'
+                    })
+            except Exception as exception:
+                metadata['pages_failed'] += 1
+                metadata['page_errors'].append({'page': page_index + 1, 'error': str(exception)})
+
+        metadata['success_rate'] = metadata['pages_succeeded'] / max(1, metadata['pages_attempted'])
+        return '\n'.join(page_texts[index] for index in sorted(page_texts)), metadata
+    except Exception as exception:
+        metadata['page_errors'].append({'error': str(exception)})
+        return '', metadata
     finally:
         if doc is not None:
             doc.close()
 
-
-def ocr_pdf(path, max_pages=DEFAULT_OCR_MAX_PAGES, zoom=2.0, workers=DEFAULT_OCR_WORKERS, languages=DEFAULT_OCR_LANGUAGES):
-    """OCR a scanned PDF by rendering pages with PyMuPDF, if available."""
-    if not HAS_PYMUPDF:
-        return ''
-    try:
-        doc = fitz.open(path)
-        total_pages = min(len(doc), max(1, max_pages))
-        doc.close()
-    except Exception:
-        return ''
-
-    page_texts = {}
-    workers = max(1, min(max(1, workers), total_pages))
-    try:
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [
-                executor.submit(_ocr_pdf_page, path, page_index, zoom, languages)
-                for page_index in range(total_pages)
-            ]
-            for future in as_completed(futures):
-                page_index, page_text = future.result()
-                if page_text:
-                    page_texts[page_index] = page_text
-    except Exception:
-        return ''
-
-    return '\n'.join(page_texts[index] for index in sorted(page_texts))
-
 def ocr_file(path, max_pages=DEFAULT_OCR_MAX_PAGES, workers=DEFAULT_OCR_WORKERS, languages=DEFAULT_OCR_LANGUAGES):
+    return ocr_file_with_metadata(path, max_pages=max_pages, workers=workers, languages=languages)[0]
+
+
+def ocr_file_with_metadata(path, max_pages=DEFAULT_OCR_MAX_PAGES, workers=DEFAULT_OCR_WORKERS, languages=DEFAULT_OCR_LANGUAGES):
     lowered = str(path).lower()
     if lowered.endswith('.pdf'):
-        return ocr_pdf(path, max_pages=max_pages, workers=workers, languages=languages)
+        return ocr_pdf_with_metadata(path, max_pages=max_pages, workers=workers, languages=languages)
     if lowered.endswith(('.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp', '.gif', '.webp')):
-        return ocr_image(path, languages=languages)
-    return ''
+        text, metadata = ocr_image_with_metadata(path, languages=languages)
+        metadata.update({
+            'pages_total': 1,
+            'pages_attempted': 1,
+            'pages_succeeded': 1 if metadata.get('success') else 0,
+            'pages_failed': 0 if metadata.get('success') else 1,
+            'success_rate': 1.0 if metadata.get('success') else 0.0
+        })
+        return text, metadata
+    return '', {'error': 'unsupported OCR file type', 'success_rate': 0.0}
 
 
 # === pgvector helpers ===
@@ -742,10 +843,11 @@ if __name__ == '__main__':
                 body = ''
 
             text = None
+            ocr_metadata = None
             if args.text:
                 text = args.text
             elif args.image:
-                ocr_text = ocr_image(args.image, languages=args.ocr_languages)
+                ocr_text, ocr_metadata = ocr_file_with_metadata(args.image, languages=args.ocr_languages)
                 text = ocr_text
             elif args.file and args.ocr:
                 base_text = ''
@@ -755,13 +857,13 @@ if __name__ == '__main__':
                         base_text = parsed.get('text', '') if isinstance(parsed, dict) else str(parsed)
                     except Exception:
                         base_text = body
-                ocr_text = ocr_file(
+                ocr_text, ocr_metadata = ocr_file_with_metadata(
                     args.file,
                     max_pages=max(1, args.ocr_max_pages),
                     workers=max(1, args.ocr_workers),
                     languages=args.ocr_languages
                 )
-                text = ocr_text if len(clean_text(ocr_text)) > len(clean_text(base_text)) else base_text
+                text = ocr_text if text_quality_score(ocr_text) > text_quality_score(base_text) else base_text
             elif body:
                 try:
                     parsed = json.loads(body)
@@ -786,6 +888,23 @@ if __name__ == '__main__':
                 }
             else:
                 result = analyze_text(str(text), model_name=args.model)
+                if ocr_metadata is not None:
+                    result['details']['ocr'] = ocr_metadata
+                    result['details']['text_quality'] = {
+                        'selected_text_score': text_quality_score(text),
+                        'ocr_text_score': text_quality_score(ocr_text if 'ocr_text' in locals() else ''),
+                        'min_text_length': DEFAULT_MIN_TEXT_LENGTH,
+                        'min_ocr_success_rate': DEFAULT_OCR_MIN_SUCCESS_RATE
+                    }
+                    if len(clean_text(text)) < DEFAULT_MIN_TEXT_LENGTH:
+                        result['overallScore'] = 0
+                        result['details']['status'] = 'FAILED'
+                        result['details']['failedStep'] = 'extraction'
+                        result['details']['errorMessage'] = 'extracted text is too short'
+                    elif ocr_metadata.get('pages_attempted', 0) > 0 and ocr_metadata.get('success_rate', 0.0) < DEFAULT_OCR_MIN_SUCCESS_RATE:
+                        result['details']['status'] = 'DEGRADED'
+                        result['details']['failedStep'] = 'OCR'
+                        result['details']['errorMessage'] = 'OCR coverage below configured threshold'
 
                 if args.pg_uri and args.pg_table and HAS_SBERT and args.store_doc:
                     try:

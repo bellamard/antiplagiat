@@ -77,11 +77,17 @@ public class PythonPlagiarismDetector implements PlagiarismDetector {
     @Value("${analysis.ocr.workers:4}")
     private int ocrWorkers;
 
-    @Value("${analysis.ocr.languages:fra+lin+swa+eng,fra+eng,fra,eng}")
+    @Value("${analysis.ocr.languages:fra+eng}")
     private String ocrLanguages;
+
+    @Value("${analysis.ocr.min-success-rate:0.60}")
+    private double ocrMinSuccessRate;
 
     @Value("${analysis.text.max-chars:500000}")
     private int maxExtractedTextChars;
+
+    @Value("${analysis.min-text-length:80}")
+    private int minTextLength;
 
     private CompletableFuture<String> readProcessOutput(InputStream inputStream) {
         return CompletableFuture.supplyAsync(() -> {
@@ -390,6 +396,8 @@ public class PythonPlagiarismDetector implements PlagiarismDetector {
             environment.putIfAbsent("ANALYSIS_OCR_MAX_PAGES", Integer.toString(Math.max(1, ocrMaxPages)));
             environment.putIfAbsent("ANALYSIS_OCR_WORKERS", Integer.toString(Math.max(1, ocrWorkers)));
             environment.putIfAbsent("ANALYSIS_OCR_LANGUAGES", ocrLanguages);
+            environment.putIfAbsent("ANALYSIS_OCR_MIN_SUCCESS_RATE", Double.toString(ocrMinSuccessRate));
+            environment.putIfAbsent("ANALYSIS_MIN_TEXT_LENGTH", Integer.toString(Math.max(1, minTextLength)));
             Process p = pb.start();
             CompletableFuture<String> stdoutFuture = readProcessOutput(p.getInputStream());
             CompletableFuture<String> stderrFuture = readProcessOutput(p.getErrorStream());
