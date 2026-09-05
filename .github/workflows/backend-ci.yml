@@ -17,10 +17,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  compile:
-    name: Compile Spring Boot backend
+  test:
+    name: Test Spring Boot backend
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     services:
       postgres:
@@ -44,6 +44,8 @@ jobs:
       PG_URI: postgresql://postgres:password@localhost:5432/antiplagiat
       JWT_SECRET: ChangeThisJwtSecretKeyWithAtLeast32Characters2026
       ANALYSIS_USE_PADDLEOCR: "false"
+      SPRING_FLYWAY_ENABLED: "true"
+      JPA_DDL_AUTO: update
 
     steps:
       - name: Checkout
@@ -63,22 +65,16 @@ jobs:
           cache: pip
           cache-dependency-path: src/main/resources/python/requirements.txt
 
-      - name: Install lightweight Python checks dependencies
+      - name: Install OCR runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-fra tesseract-ocr-eng
+          tesseract --list-langs
+
+      - name: Install Python analyzer dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install psycopg2-binary PyMuPDF
-
-      - name: Enable pgvector extension
-        run: |
-          python - <<'PY'
-          import psycopg2
-          conn = psycopg2.connect("postgresql://postgres:password@localhost:5432/antiplagiat")
-          conn.autocommit = True
-          cur = conn.cursor()
-          cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
-          cur.close()
-          conn.close()
-          PY
+          python -m pip install -r src/main/resources/python/requirements.txt
 
       - name: Validate Python analyzer syntax
         run: python -m py_compile src/main/resources/python/ai_analyzer.py
@@ -86,5 +82,13 @@ jobs:
       - name: Make Maven wrapper executable
         run: chmod +x ./mvnw
 
-      - name: Compile backend
-        run: ./mvnw -q -DskipTests compile
+      - name: Run backend tests
+        run: ./mvnw -q test
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports
+          if-no-files-found: ignore
