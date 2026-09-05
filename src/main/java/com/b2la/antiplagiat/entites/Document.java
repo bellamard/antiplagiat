@@ -65,6 +65,15 @@ public class Document {
     @Column(nullable = false)
     private long fileSize;
 
+    @Column(length = 64)
+    private String sha256Hash;
+
+    private long originalSizeBytes;
+
+    private long compressedSizeBytes;
+
+    private long base64SizeBytes;
+
     @Lob
     @Basic(fetch = FetchType.LAZY)
     @Column(columnDefinition = "TEXT")

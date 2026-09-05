@@ -156,6 +156,8 @@ public class ReportService {
         document.setCompressedBase64Content(null);
         document.setContentCompressed(false);
         document.setStoredSize(0);
+        document.setCompressedSizeBytes(0);
+        document.setBase64SizeBytes(0);
         documentsRespository.save(document);
     }
 

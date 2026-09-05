@@ -34,6 +34,10 @@ public interface DocumentsRespository extends JpaRepository<Document, UUID> {
                 d.originalFileName,
                 d.contentType,
                 d.fileSize,
+                d.sha256Hash,
+                d.originalSizeBytes,
+                d.compressedSizeBytes,
+                d.base64SizeBytes,
                 null,
                 null
             )
@@ -61,6 +65,10 @@ public interface DocumentsRespository extends JpaRepository<Document, UUID> {
                 d.originalFileName,
                 d.contentType,
                 d.fileSize,
+                d.sha256Hash,
+                d.originalSizeBytes,
+                d.compressedSizeBytes,
+                d.base64SizeBytes,
                 null,
                 null
             )

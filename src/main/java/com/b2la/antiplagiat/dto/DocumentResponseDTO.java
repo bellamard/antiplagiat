@@ -20,6 +20,10 @@ public record DocumentResponseDTO(
         String originalFileName,
         String contentType,
         long fileSize,
+        String sha256Hash,
+        long originalSizeBytes,
+        long compressedSizeBytes,
+        long base64SizeBytes,
         UUID analysisId,
         String analysisStatus
 ) {

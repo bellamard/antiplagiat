@@ -26,6 +26,8 @@ import java.net.MalformedURLException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
@@ -117,14 +119,19 @@ public class DocumentService {
         file.transferTo(destination);
 
         long fileSize = Files.size(destination);
+        String sha256Hash = sha256Hex(destination);
         String compressedBase64Content = null;
         boolean contentCompressed = false;
         long storedSize = 0;
+        long compressedSizeBytes = 0;
+        long base64SizeBytes = 0;
 
         if (maxDatabaseBase64FileSize > 0 && fileSize <= maxDatabaseBase64FileSize) {
             compressedBase64Content = compressToBase64(destination);
             contentCompressed = true;
             storedSize = compressedBase64Content.length();
+            base64SizeBytes = compressedBase64Content.length();
+            compressedSizeBytes = Base64.getDecoder().decode(compressedBase64Content).length;
         }
 
         Document document = Document.builder()
@@ -144,6 +151,10 @@ public class DocumentService {
                 .originalFileName(originalFileName)
                 .contentType(detectedContentType)
                 .fileSize(fileSize)
+                .sha256Hash(sha256Hash)
+                .originalSizeBytes(fileSize)
+                .compressedSizeBytes(compressedSizeBytes)
+                .base64SizeBytes(base64SizeBytes)
                 .compressedBase64Content(compressedBase64Content)
                 .contentCompressed(contentCompressed)
                 .storedSize(storedSize)
@@ -183,17 +194,21 @@ public class DocumentService {
 
         if (filePath.startsWith(storageDirectory) && Files.exists(filePath)) {
             try {
+                verifyHash(document, Files.readAllBytes(filePath));
                 return new UrlResource(filePath.toUri());
             } catch (MalformedURLException exception) {
                 throw new IllegalArgumentException("Chemin de fichier invalide");
+            } catch (IOException exception) {
+                throw new IllegalArgumentException("Impossible de vérifier l'intégrité du fichier");
             }
         }
 
         if (document.getCompressedBase64Content() != null && !document.getCompressedBase64Content().isBlank()) {
             try {
                 Path temporaryDownloadFile = Files.createTempFile("antiplagiat-download-", tempFileSuffix(document));
-                Files.write(temporaryDownloadFile, decompressBase64(document.getCompressedBase64Content(), document.isContentCompressed()));
-                temporaryDownloadFile.toFile().deleteOnExit();
+                byte[] restoredContent = decompressBase64(document.getCompressedBase64Content(), document.isContentCompressed());
+                verifyHash(document, restoredContent);
+                Files.write(temporaryDownloadFile, restoredContent);
                 return new UrlResource(temporaryDownloadFile.toUri());
             } catch (IOException exception) {
                 throw new IllegalArgumentException("Contenu du document invalide");
@@ -326,7 +341,9 @@ public class DocumentService {
             throw new EntityNotFoundException("Fichier introuvable");
         }
 
-        return Files.readAllBytes(filePath);
+        byte[] content = Files.readAllBytes(filePath);
+        verifyHash(document, content);
+        return content;
     }
 
     private byte[] decompressBase64(String content, boolean compressed) throws IOException {
@@ -397,6 +414,10 @@ public class DocumentService {
                 document.getOriginalFileName(),
                 document.getContentType(),
                 document.getFileSize(),
+                document.getSha256Hash(),
+                document.getOriginalSizeBytes(),
+                document.getCompressedSizeBytes(),
+                document.getBase64SizeBytes(),
                 analysis == null ? null : analysis.id(),
                 analysis == null ? null : analysis.status()
         );
@@ -429,8 +450,41 @@ public class DocumentService {
                 document.originalFileName(),
                 document.contentType(),
                 document.fileSize(),
+                document.sha256Hash(),
+                document.originalSizeBytes(),
+                document.compressedSizeBytes(),
+                document.base64SizeBytes(),
                 document.analysisId(),
                 document.analysisStatus()
         );
+    }
+
+    private String sha256Hex(Path filePath) throws IOException {
+        return sha256Hex(Files.readAllBytes(filePath));
+    }
+
+    private String sha256Hex(byte[] bytes) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(bytes);
+            StringBuilder builder = new StringBuilder(hash.length * 2);
+            for (byte value : hash) {
+                builder.append(String.format("%02x", value));
+            }
+            return builder.toString();
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 non disponible", exception);
+        }
+    }
+
+    private void verifyHash(Document document, byte[] bytes) {
+        if (document.getSha256Hash() == null || document.getSha256Hash().isBlank()) {
+            return;
+        }
+
+        String actualHash = sha256Hex(bytes);
+        if (!document.getSha256Hash().equalsIgnoreCase(actualHash)) {
+            throw new IllegalArgumentException("Hash SHA-256 du document invalide");
+        }
     }
 }
