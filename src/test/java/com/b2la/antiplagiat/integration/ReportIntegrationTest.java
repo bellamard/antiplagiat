@@ -159,15 +159,54 @@ public class ReportIntegrationTest {
                 .andExpect(status().isOk());
     }
 
+    @Test
+    public void reportRequiresExactlyOneIdentifier() throws Exception {
+        var doc = documentsRespository.findAll().get(0);
+        String id = createCompletedAnalysis(doc, owner).getId().toString();
+
+        mockMvc.perform(post("/api/reports")
+                .with(user(owner.getUsername()).roles("STUDENT"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+                .andExpect(status().isBadRequest());
+
+        String reportBody = mapper.writeValueAsString(java.util.Map.of(
+                "analysisId", id,
+                "documentId", doc.getId().toString()
+        ));
+        mockMvc.perform(post("/api/reports")
+                .with(user(owner.getUsername()).roles("STUDENT"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(reportBody))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    public void failedAnalysisCannotGenerateReport() throws Exception {
+        var doc = documentsRespository.findAll().get(0);
+        String id = createAnalysis(doc, owner, StatusEnum.FAILED).getId().toString();
+
+        String reportBody = mapper.writeValueAsString(java.util.Map.of("analysisId", id));
+        mockMvc.perform(post("/api/reports")
+                .with(user(owner.getUsername()).roles("STUDENT"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(reportBody))
+                .andExpect(status().isConflict());
+    }
+
     private AnalysisHistory createCompletedAnalysis(Document document, Users user) {
-        Status completed = statusRepository.save(Status.builder().libelle(StatusEnum.COMPLETED).build());
+        return createAnalysis(document, user, StatusEnum.COMPLETED);
+    }
+
+    private AnalysisHistory createAnalysis(Document document, Users user, StatusEnum statusEnum) {
+        Status completed = statusRepository.save(Status.builder().libelle(statusEnum).build());
         return historyRepository.save(AnalysisHistory.builder()
                 .document(document)
                 .user(user)
                 .overallScore(12.5)
                 .aiScore(0.0)
                 .status(completed)
-                .details("{\"status\":\"COMPLETED\"}")
+                .details("{\"status\":\"" + statusEnum.name() + "\"}")
                 .build());
     }
 }

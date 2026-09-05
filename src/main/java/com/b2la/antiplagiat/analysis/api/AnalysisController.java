@@ -52,7 +52,7 @@ public class AnalysisController {
         return new AnalysisResponse(
                 view.id(), view.documentId(), view.documentName(), view.userId(), view.username(),
                 view.overallScore(), view.aiScore(), view.status(), view.failedStep(), view.errorMessage(),
-                view.details(), view.startedAt(), view.finishedAt(), view.createdAt()
+                view.attempts(), view.maxAttempts(), view.details(), view.startedAt(), view.finishedAt(), view.createdAt()
         );
     }
 }

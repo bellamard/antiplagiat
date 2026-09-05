@@ -153,6 +153,8 @@ public class AnalysisService {
                 h.getStatus().getLibelle().name(),
                 h.getFailedStep(),
                 h.getErrorMessage(),
+                h.getAttempts(),
+                h.getMaxAttempts(),
                 h.getDetails(),
                 h.getStartedAt(),
                 h.getFinishedAt(),

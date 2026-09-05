@@ -12,6 +12,7 @@ import com.b2la.antiplagiat.repository.StatusRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityNotFoundException;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -26,17 +27,23 @@ public class AnalysisWorkerService {
     private final ScoresRepository scoresRepository;
     private final StatusRepository statusRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final int maxAttempts;
+    private final long retryDelayMillis;
 
     public AnalysisWorkerService(
             AnalysisHistoryRepository historyRepository,
             PlagiarismDetector plagiarismDetector,
             ScoresRepository scoresRepository,
-            StatusRepository statusRepository
+            StatusRepository statusRepository,
+            @Value("${analysis.worker.max-attempts:3}") int maxAttempts,
+            @Value("${analysis.worker.retry-delay-millis:5000}") long retryDelayMillis
     ) {
         this.historyRepository = historyRepository;
         this.plagiarismDetector = plagiarismDetector;
         this.scoresRepository = scoresRepository;
         this.statusRepository = statusRepository;
+        this.maxAttempts = Math.max(1, maxAttempts);
+        this.retryDelayMillis = Math.max(0, retryDelayMillis);
     }
 
     @Async
@@ -50,40 +57,71 @@ public class AnalysisWorkerService {
 
         history.setStatus(status(StatusEnum.PROCESSING));
         history.setStartedAt(LocalDateTime.now());
+        history.setMaxAttempts(maxAttempts);
         history.setDetails("{\"status\":\"PROCESSING\"}");
         historyRepository.save(history);
 
-        try {
-            AnalysisResult result = plagiarismDetector.analyze(history.getDocument());
-            StatusEnum finalStatus = resolveFinalStatus(result);
+        for (int attempt = Math.max(1, history.getAttempts() + 1); attempt <= maxAttempts; attempt++) {
+            try {
+                AnalysisHistory current = historyRepository.findByIdWithRelations(historyId)
+                        .orElseThrow(() -> new EntityNotFoundException("Historique introuvable"));
+                if (current.getStatus().getLibelle() == StatusEnum.CANCELLED) {
+                    return;
+                }
+                current.setAttempts(attempt);
+                current.setMaxAttempts(maxAttempts);
+                historyRepository.save(current);
 
-            AnalysisHistory latest = historyRepository.findByIdWithRelations(historyId)
-                    .orElseThrow(() -> new EntityNotFoundException("Historique introuvable"));
-            if (latest.getStatus().getLibelle() == StatusEnum.CANCELLED) {
+                AnalysisResult result = plagiarismDetector.analyze(current.getDocument());
+                StatusEnum finalStatus = resolveFinalStatus(result);
+
+                AnalysisHistory latest = historyRepository.findByIdWithRelations(historyId)
+                        .orElseThrow(() -> new EntityNotFoundException("Historique introuvable"));
+                if (latest.getStatus().getLibelle() == StatusEnum.CANCELLED) {
+                    return;
+                }
+
+                latest.setOverallScore(result.getOverallScore());
+                latest.setAiScore(result.getAiScore());
+                latest.setDetails(result.getDetails());
+                latest.setStatus(status(finalStatus));
+                latest.setFailedStep(extractText(result.getDetails(), "failedStep"));
+                latest.setErrorMessage(extractText(result.getDetails(), "errorMessage"));
+                latest.setFinishedAt(LocalDateTime.now());
+                AnalysisHistory saved = historyRepository.save(latest);
+
+                if (finalStatus == StatusEnum.COMPLETED || finalStatus == StatusEnum.DEGRADED) {
+                    syncScore(saved, finalStatus);
+                }
                 return;
-            }
+            } catch (Exception exception) {
+                if (attempt < maxAttempts) {
+                    waitBeforeRetry();
+                    continue;
+                }
 
-            latest.setOverallScore(result.getOverallScore());
-            latest.setAiScore(result.getAiScore());
-            latest.setDetails(result.getDetails());
-            latest.setStatus(status(finalStatus));
-            latest.setFailedStep(extractText(result.getDetails(), "failedStep"));
-            latest.setErrorMessage(extractText(result.getDetails(), "errorMessage"));
-            latest.setFinishedAt(LocalDateTime.now());
-            AnalysisHistory saved = historyRepository.save(latest);
-
-            if (finalStatus == StatusEnum.COMPLETED || finalStatus == StatusEnum.DEGRADED) {
-                syncScore(saved, finalStatus);
+                AnalysisHistory failed = historyRepository.findByIdWithRelations(historyId)
+                        .orElseThrow(() -> new EntityNotFoundException("Historique introuvable"));
+                failed.setStatus(status(StatusEnum.FAILED));
+                failed.setFailedStep("analysis");
+                failed.setErrorMessage(exception.getMessage());
+                failed.setAttempts(attempt);
+                failed.setMaxAttempts(maxAttempts);
+                failed.setDetails(errorDetails(exception, attempt, maxAttempts));
+                failed.setFinishedAt(LocalDateTime.now());
+                historyRepository.save(failed);
             }
-        } catch (Exception exception) {
-            AnalysisHistory failed = historyRepository.findByIdWithRelations(historyId)
-                    .orElseThrow(() -> new EntityNotFoundException("Historique introuvable"));
-            failed.setStatus(status(StatusEnum.FAILED));
-            failed.setFailedStep("analysis");
-            failed.setErrorMessage(exception.getMessage());
-            failed.setDetails(errorDetails(exception));
-            failed.setFinishedAt(LocalDateTime.now());
-            historyRepository.save(failed);
+        }
+    }
+
+    private void waitBeforeRetry() {
+        if (retryDelayMillis <= 0) {
+            return;
+        }
+        try {
+            Thread.sleep(retryDelayMillis);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -147,11 +185,13 @@ public class AnalysisWorkerService {
                 .orElseGet(() -> statusRepository.save(Status.builder().libelle(status).build()));
     }
 
-    private String errorDetails(Exception exception) {
+    private String errorDetails(Exception exception, int attempts, int maxAttempts) {
         try {
             return objectMapper.writeValueAsString(java.util.Map.of(
                     "status", "FAILED",
                     "failedStep", "analysis",
+                    "attempts", attempts,
+                    "maxAttempts", maxAttempts,
                     "errorMessage", exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage()
             ));
         } catch (Exception ignored) {

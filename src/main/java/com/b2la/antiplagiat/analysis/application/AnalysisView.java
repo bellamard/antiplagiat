@@ -14,6 +14,8 @@ public record AnalysisView(
         String status,
         String failedStep,
         String errorMessage,
+        int attempts,
+        int maxAttempts,
         String details,
         LocalDateTime startedAt,
         LocalDateTime finishedAt,

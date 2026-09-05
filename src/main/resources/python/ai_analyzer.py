@@ -527,8 +527,6 @@ def store_semantic_chunks_pg(pg_uri, table, doc_id, chunks, embeddings):
         conn.close()
         return {'ok': True, 'chunks': len(chunks), 'embedding_dim': dim}
     except Exception as e:
-        if 'does not exist' in str(e):
-            return {'ok': True, 'rows': []}
         return {'ok': False, 'error': str(e)}
 
 
@@ -660,7 +658,15 @@ def query_chunks_before_store_pg(pg_uri, table, doc_id, chunks, embeddings, k=5,
 def analyze_text(text: str, model_name='all-MiniLM-L6-v2'):
     text = clean_text(text)
     if not text:
-        return {'overallScore': 0, 'aiScore': 0, 'details': {'error': 'empty'}}
+        return {
+            'overallScore': 0,
+            'aiScore': 0,
+            'details': {
+                'status': 'FAILED',
+                'failedStep': 'extraction',
+                'errorMessage': 'empty text'
+            }
+        }
 
     all_sentences = split_sentences(text)
     truncated = len(all_sentences) > MAX_SENTENCES
@@ -769,7 +775,15 @@ if __name__ == '__main__':
                     text = body
 
             if not text or not str(text).strip():
-                result = {'overallScore': 0, 'aiScore': 0, 'details': {'error': 'empty input'}}
+                result = {
+                    'overallScore': 0,
+                    'aiScore': 0,
+                    'details': {
+                        'status': 'FAILED',
+                        'failedStep': 'extraction',
+                        'errorMessage': 'empty input'
+                    }
+                }
             else:
                 result = analyze_text(str(text), model_name=args.model)
 
@@ -828,6 +842,14 @@ if __name__ == '__main__':
         sys.stdout.write(json.dumps(result, ensure_ascii=True))
         sys.stdout.write("\n")
     except Exception as e:
-        sys.stdout.write(json.dumps({'overallScore': 0, 'aiScore': 0, 'details': {'error': clean_text(str(e))}}, ensure_ascii=True))
+        sys.stdout.write(json.dumps({
+            'overallScore': 0,
+            'aiScore': 0,
+            'details': {
+                'status': 'FAILED',
+                'failedStep': 'analysis',
+                'errorMessage': clean_text(str(e))
+            }
+        }, ensure_ascii=True))
         sys.stdout.write("\n")
         sys.exit(1)

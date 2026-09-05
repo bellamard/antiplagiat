@@ -1,7 +1,9 @@
-application.properties
 HELP.md
 target/
 uploads/
+.codex-temp-index
+__pycache__/
+*.py[cod]
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/

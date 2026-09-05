@@ -45,6 +45,12 @@ public class AnalysisHistory {
     @Column(columnDefinition = "TEXT")
     private String errorMessage;
 
+    @Builder.Default
+    private int attempts = 0;
+
+    @Builder.Default
+    private int maxAttempts = 1;
+
     @Column(columnDefinition = "TEXT")
     private String details; // JSON details or analysis metadata
 
