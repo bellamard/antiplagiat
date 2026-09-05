@@ -9,6 +9,7 @@ import com.b2la.antiplagiat.repository.DocumentsRespository;
 import com.b2la.antiplagiat.repository.UsersRepository;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.transaction.Transactional;
+import org.apache.tika.Tika;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
@@ -41,11 +42,24 @@ public class DocumentService {
             "pdf", "doc", "docx", "txt",
             "png", "jpg", "jpeg", "tif", "tiff", "bmp", "gif", "webp"
     );
+    private static final Set<String> ALLOWED_MIME_TYPES = Set.of(
+            "application/pdf",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "text/plain",
+            "image/png",
+            "image/jpeg",
+            "image/tiff",
+            "image/bmp",
+            "image/gif",
+            "image/webp"
+    );
     private static final String PENDING_DOCUMENT_URL_PREFIX = "/api/documents/pending";
 
     private final DocumentsRespository documentsRespository;
     private final UsersRepository usersRepository;
     private final AnalysisService analysisService;
+    private final Tika tika = new Tika();
     private final Path storageDirectory;
     private final long maxDatabaseBase64FileSize;
 
@@ -83,7 +97,7 @@ public class DocumentService {
         validateRequired(author, "L'auteur est obligatoire");
         validateRequired(yearOfAcademic, "L'année académique est obligatoire");
         validateRequired(matriculation, "Le matricule est obligatoire");
-        validateFile(file);
+        String detectedContentType = validateFile(file);
 
         if (documentsRespository.existsByMatriculation(matriculation)) {
             throw new IllegalArgumentException("Un document existe déjà avec ce matricule");
@@ -128,7 +142,7 @@ public class DocumentService {
                 .urlFile(downloadUrl(documentId))
                 .storedFileName(storedFileName)
                 .originalFileName(originalFileName)
-                .contentType(file.getContentType())
+                .contentType(detectedContentType)
                 .fileSize(fileSize)
                 .compressedBase64Content(compressedBase64Content)
                 .contentCompressed(contentCompressed)
@@ -239,7 +253,7 @@ public class DocumentService {
         }
     }
 
-    private void validateFile(MultipartFile file) {
+    private String validateFile(MultipartFile file) throws IOException {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("Le fichier est obligatoire");
         }
@@ -250,6 +264,29 @@ public class DocumentService {
         if (!ALLOWED_EXTENSIONS.contains(extension)) {
             throw new IllegalArgumentException("Type de fichier non autorisé. Formats acceptés : pdf, doc, docx, txt, png, jpg, jpeg, tif, tiff, bmp, gif, webp");
         }
+
+        String detectedContentType;
+        try (InputStream inputStream = file.getInputStream()) {
+            detectedContentType = tika.detect(inputStream, originalFileName);
+        }
+
+        if (detectedContentType == null || !ALLOWED_MIME_TYPES.contains(detectedContentType.toLowerCase(Locale.ROOT))) {
+            throw new IllegalArgumentException("Type MIME réel non autorisé : " + detectedContentType);
+        }
+
+        if ((extension.equals("pdf") && !detectedContentType.equalsIgnoreCase("application/pdf"))
+                || ((extension.equals("jpg") || extension.equals("jpeg")) && !detectedContentType.equalsIgnoreCase("image/jpeg"))
+                || (extension.equals("png") && !detectedContentType.equalsIgnoreCase("image/png"))
+                || ((extension.equals("tif") || extension.equals("tiff")) && !detectedContentType.equalsIgnoreCase("image/tiff"))
+                || (extension.equals("gif") && !detectedContentType.equalsIgnoreCase("image/gif"))
+                || (extension.equals("webp") && !detectedContentType.equalsIgnoreCase("image/webp"))
+                || (extension.equals("docx") && !detectedContentType.equalsIgnoreCase("application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+                || (extension.equals("doc") && !detectedContentType.equalsIgnoreCase("application/msword"))
+                || (extension.equals("txt") && !detectedContentType.equalsIgnoreCase("text/plain"))) {
+            throw new IllegalArgumentException("L'extension du fichier ne correspond pas à son contenu réel");
+        }
+
+        return detectedContentType;
     }
 
     private String sanitizeFileName(String originalFileName) {

@@ -13,9 +13,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.transaction.Transactional;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
 import java.util.UUID;
 
@@ -27,15 +31,18 @@ public class ReportService {
     private final AnalysisHistoryRepository historyRepository;
     private final DocumentsRespository documentsRespository;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final Path storageDirectory;
 
     public ReportService(
             ReportRepository reportRepository,
             AnalysisHistoryRepository historyRepository,
-            DocumentsRespository documentsRespository
+            DocumentsRespository documentsRespository,
+            @Value("${app.documents.storage-dir:uploads/documents}") String storageDirectory
     ) {
         this.reportRepository = reportRepository;
         this.historyRepository = historyRepository;
         this.documentsRespository = documentsRespository;
+        this.storageDirectory = Paths.get(storageDirectory).toAbsolutePath().normalize();
     }
 
     public ReportResponseDTO generateReport(ReportRequestDTO req, String username) {
@@ -48,6 +55,10 @@ public class ReportService {
             throw new IllegalStateException("Impossible de générer un rapport final pour une analyse " + history.getStatus().getLibelle());
         }
 
+        if (Boolean.TRUE.equals(req.clearBase64Content())) {
+            clearBase64Content(history.getDocument());
+        }
+
         String content = buildReportContent(history);
 
         Report r = Report.builder()
@@ -58,10 +69,6 @@ public class ReportService {
                 .build();
 
         Report saved = reportRepository.save(r);
-        if (Boolean.TRUE.equals(req.clearBase64Content())) {
-            clearBase64Content(history.getDocument());
-        }
-
         return toResponse(saved);
     }
 
@@ -138,10 +145,27 @@ public class ReportService {
     }
 
     private void clearBase64Content(Document document) {
+        if (!hasBase64Content(document)) {
+            return;
+        }
+
+        if (!hasValidDiskCopy(document)) {
+            throw new IllegalStateException("Impossible de supprimer le Base64 : aucune copie disque valide n'existe");
+        }
+
         document.setCompressedBase64Content(null);
         document.setContentCompressed(false);
         document.setStoredSize(0);
         documentsRespository.save(document);
+    }
+
+    private boolean hasValidDiskCopy(Document document) {
+        if (document.getStoredFileName() == null || document.getStoredFileName().isBlank()) {
+            return false;
+        }
+
+        Path filePath = storageDirectory.resolve(document.getStoredFileName()).normalize();
+        return filePath.startsWith(storageDirectory) && Files.isRegularFile(filePath);
     }
 
     private ReportResponseDTO toResponse(Report r) {

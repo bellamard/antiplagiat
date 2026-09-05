@@ -441,25 +441,21 @@ def validate_sql_identifier(identifier):
     return identifier
 
 
-def _ensure_pgvector_chunk_table(cur, table, dim):
-    cur.execute(f"""
-        CREATE TABLE IF NOT EXISTS {table} (
-            document_id TEXT NOT NULL,
-            chunk_index INTEGER NOT NULL,
-            chunk_hash TEXT NOT NULL,
-            chunk_text TEXT NOT NULL,
-            embedding vector({dim}) NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            PRIMARY KEY (document_id, chunk_index)
-        )
-    """)
-    cur.execute(f"CREATE INDEX IF NOT EXISTS {table}_document_id_idx ON {table} (document_id)")
-    cur.execute(f"CREATE INDEX IF NOT EXISTS {table}_chunk_hash_idx ON {table} (chunk_hash)")
-    try:
-        cur.execute(f"CREATE INDEX IF NOT EXISTS {table}_embedding_hnsw_idx ON {table} USING hnsw (embedding vector_cosine_ops)")
-    except Exception:
-        # Older pgvector versions may not support HNSW. Exact search still works.
-        pass
+def _verify_pgvector_chunk_table(cur, table, dim):
+    cur.execute("SELECT to_regclass(%s)", (table,))
+    if cur.fetchone()[0] is None:
+        raise RuntimeError(f"pgvector table '{table}' is missing; run database migrations before analysis")
+
+    cur.execute("""
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = %s
+          AND column_name IN ('document_id', 'chunk_index', 'chunk_hash', 'chunk_text', 'embedding')
+        GROUP BY table_name
+        HAVING COUNT(*) = 5
+    """, (table,))
+    if cur.fetchone() is None:
+        raise RuntimeError(f"pgvector table '{table}' does not have the expected chunk schema")
 
 
 def store_doc_embedding_pg(pg_uri, table, doc_id, text, embedding):
@@ -474,11 +470,17 @@ def store_doc_embedding_pg(pg_uri, table, doc_id, text, embedding):
         conn = psycopg2.connect(pg_uri)
         cur = conn.cursor()
         dim = len(embedding)
-        cur.execute('CREATE EXTENSION IF NOT EXISTS vector')
-        cur.execute(f"CREATE TABLE IF NOT EXISTS {table} (doc_id TEXT PRIMARY KEY, text TEXT, embedding vector({dim}))")
+        _verify_pgvector_chunk_table(cur, table, dim)
         # upsert
-        cur.execute(f"INSERT INTO {table} (doc_id, text, embedding) VALUES (%s, %s, %s::vector) ON CONFLICT (doc_id) DO UPDATE SET text = EXCLUDED.text, embedding = EXCLUDED.embedding",
-                    (doc_id, text, lit))
+        cur.execute(f"""
+            INSERT INTO {table} (document_id, chunk_index, chunk_hash, chunk_text, embedding)
+            VALUES (%s, 0, %s, %s, %s::vector)
+            ON CONFLICT (document_id, chunk_index) DO UPDATE SET
+                chunk_hash = EXCLUDED.chunk_hash,
+                chunk_text = EXCLUDED.chunk_text,
+                embedding = EXCLUDED.embedding,
+                created_at = NOW()
+        """, (doc_id, hashlib.sha256(text.encode('utf-8')).hexdigest(), text, lit))
         conn.commit()
         cur.close()
         conn.close()
@@ -498,7 +500,7 @@ def store_semantic_chunks_pg(pg_uri, table, doc_id, chunks, embeddings):
         conn = psycopg2.connect(pg_uri)
         cur = conn.cursor()
         dim = len(embeddings[0])
-        _ensure_pgvector_chunk_table(cur, table, dim)
+        _verify_pgvector_chunk_table(cur, table, dim)
 
         rows = []
         for idx, chunk in enumerate(chunks):
