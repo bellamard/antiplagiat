@@ -372,7 +372,7 @@ public class PythonPlagiarismDetector implements PlagiarismDetector {
 
             // pgvector args if configured
             if (pgEnabled && pgUri != null && !pgUri.isBlank() && pgTable != null && !pgTable.isBlank()) {
-                cmd.addAll(Arrays.asList("--pg-uri", pgUri, "--pg-table", pgTable, "--store-doc", document.getId().toString()));
+                cmd.addAll(Arrays.asList("--pg-table", pgTable, "--store-doc", document.getId().toString()));
                 cmd.addAll(Arrays.asList("--current-doc", document.getId().toString()));
                 cmd.addAll(Arrays.asList("--query-k", Integer.toString(Math.max(1, queryK))));
                 cmd.addAll(Arrays.asList("--chunk-max-chars", Integer.toString(chunkMaxChars)));
@@ -389,6 +389,9 @@ public class PythonPlagiarismDetector implements PlagiarismDetector {
             Map<String, String> environment = pb.environment();
             environment.putIfAbsent("PYTHONUTF8", "1");
             environment.putIfAbsent("PYTHONIOENCODING", "utf-8");
+            if (pgEnabled && pgUri != null && !pgUri.isBlank()) {
+                environment.put("ANALYSIS_PG_URI", pgUri);
+            }
             environment.putIfAbsent("HF_HUB_OFFLINE", "1");
             environment.putIfAbsent("TRANSFORMERS_OFFLINE", "1");
             environment.putIfAbsent("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True");

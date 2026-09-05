@@ -558,6 +558,20 @@ def _verify_pgvector_chunk_table(cur, table, dim):
     if cur.fetchone() is None:
         raise RuntimeError(f"pgvector table '{table}' does not have the expected chunk schema")
 
+    cur.execute("""
+        SELECT format_type(a.atttypid, a.atttypmod)
+        FROM pg_attribute a
+        JOIN pg_class c ON c.oid = a.attrelid
+        WHERE c.relname = %s
+          AND a.attname = 'embedding'
+          AND NOT a.attisdropped
+    """, (table,))
+    row = cur.fetchone()
+    embedding_type = row[0] if row else ''
+    expected_type = f'vector({dim})'
+    if embedding_type != expected_type:
+        raise RuntimeError(f"embedding dimension mismatch: table has {embedding_type}, model produced {expected_type}")
+
 
 def store_doc_embedding_pg(pg_uri, table, doc_id, text, embedding):
     """Store or update a single document-level embedding in Postgres using pgvector."""
@@ -590,7 +604,7 @@ def store_doc_embedding_pg(pg_uri, table, doc_id, text, embedding):
         return {'ok': False, 'error': str(e)}
 
 
-def store_semantic_chunks_pg(pg_uri, table, doc_id, chunks, embeddings):
+def store_semantic_chunks_pg(pg_uri, table, doc_id, chunks, embeddings, model_name='unknown', chunking_version='semantic-v1'):
     """Store sentence-boundary semantic chunks and their pgvector embeddings."""
     if not HAS_PSYCOPG:
         return {'ok': False, 'error': 'psycopg/psycopg2 not available'}
@@ -606,22 +620,24 @@ def store_semantic_chunks_pg(pg_uri, table, doc_id, chunks, embeddings):
         rows = []
         for idx, chunk in enumerate(chunks):
             chunk_hash = hashlib.sha256(chunk.encode('utf-8')).hexdigest()
-            rows.append((doc_id, idx, chunk_hash, chunk, _vec_literal(embeddings[idx])))
+            rows.append((doc_id, idx, chunk_hash, chunk, _vec_literal(embeddings[idx]), model_name, chunking_version))
 
         cur.execute(f"DELETE FROM {table} WHERE document_id = %s", (doc_id,))
         execute_values(
             cur,
             f"""
-            INSERT INTO {table} (document_id, chunk_index, chunk_hash, chunk_text, embedding)
+            INSERT INTO {table} (document_id, chunk_index, chunk_hash, chunk_text, embedding, model_name, chunking_version)
             VALUES %s
             ON CONFLICT (document_id, chunk_index) DO UPDATE SET
                 chunk_hash = EXCLUDED.chunk_hash,
                 chunk_text = EXCLUDED.chunk_text,
                 embedding = EXCLUDED.embedding,
+                model_name = EXCLUDED.model_name,
+                chunking_version = EXCLUDED.chunking_version,
                 created_at = NOW()
             """,
             rows,
-            template="(%s, %s, %s, %s, %s::vector)"
+            template="(%s, %s, %s, %s, %s::vector, %s, %s)"
         )
         conn.commit()
         cur.close()
@@ -822,7 +838,7 @@ if __name__ == '__main__':
             parser.add_argument('--image', help='Path to image to OCR')
             parser.add_argument('--file', help='Path to original document for OCR fallback')
             parser.add_argument('--ocr', action='store_true', help='Run OCR on --file and append/replace weak extracted text')
-            parser.add_argument('--pg-uri', help='Postgres URI (for pgvector)')
+            parser.add_argument('--pg-uri', default=os.getenv('ANALYSIS_PG_URI'), help='Postgres URI (for pgvector)')
             parser.add_argument('--pg-table', help='Postgres table name for embeddings')
             parser.add_argument('--store-doc', help='Document id to store in pg table')
             parser.add_argument('--current-doc', help='Current document id to exclude from pgvector results')
@@ -933,7 +949,15 @@ if __name__ == '__main__':
                                 'Internal repeated passages are reported separately and are not treated as plagiarism evidence.'
                             ]
 
-                        store_res = store_semantic_chunks_pg(args.pg_uri, args.pg_table, args.store_doc, chunks, embeddings)
+                        store_res = store_semantic_chunks_pg(
+                            args.pg_uri,
+                            args.pg_table,
+                            args.store_doc,
+                            chunks,
+                            embeddings,
+                            model_name=args.model,
+                            chunking_version='semantic-v1'
+                        )
                         result['pg_store'] = store_res
                         result['details']['semantic_chunks'] = len(chunks)
                         result['details']['pg_store'] = store_res
