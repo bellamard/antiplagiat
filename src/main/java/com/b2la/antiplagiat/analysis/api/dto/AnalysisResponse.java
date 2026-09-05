@@ -11,7 +11,12 @@ public record AnalysisResponse(
         String username,
         double overallScore,
         double aiScore,
+        String status,
+        String failedStep,
+        String errorMessage,
         String details,
+        LocalDateTime startedAt,
+        LocalDateTime finishedAt,
         LocalDateTime createdAt
 ) {
 }

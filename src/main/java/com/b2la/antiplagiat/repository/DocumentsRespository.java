@@ -33,7 +33,9 @@ public interface DocumentsRespository extends JpaRepository<Document, UUID> {
                 d.urlFile,
                 d.originalFileName,
                 d.contentType,
-                d.fileSize
+                d.fileSize,
+                null,
+                null
             )
             from Document d
             join d.user u
@@ -58,7 +60,9 @@ public interface DocumentsRespository extends JpaRepository<Document, UUID> {
                 d.urlFile,
                 d.originalFileName,
                 d.contentType,
-                d.fileSize
+                d.fileSize,
+                null,
+                null
             )
             from Document d
             join d.user u

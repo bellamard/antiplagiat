@@ -19,6 +19,8 @@ public record DocumentResponseDTO(
         String urlFile,
         String originalFileName,
         String contentType,
-        long fileSize
+        long fileSize,
+        UUID analysisId,
+        String analysisStatus
 ) {
 }

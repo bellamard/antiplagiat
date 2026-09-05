@@ -28,13 +28,29 @@ public class AnalysisHistory {
     private Users user;
 
     @Column(nullable = false)
-    private double overallScore;
+    @Builder.Default
+    private double overallScore = 0.0;
 
     @Column(nullable = false)
-    private double aiScore;
+    @Builder.Default
+    private double aiScore = 0.0;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "status_id", nullable = false)
+    private Status status;
+
+    @Column(length = 64)
+    private String failedStep;
+
+    @Column(columnDefinition = "TEXT")
+    private String errorMessage;
 
     @Column(columnDefinition = "TEXT")
     private String details; // JSON details or analysis metadata
+
+    private LocalDateTime startedAt;
+
+    private LocalDateTime finishedAt;
 
     @CreationTimestamp
     @Column(nullable = false)

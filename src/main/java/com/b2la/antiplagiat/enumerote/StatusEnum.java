@@ -4,5 +4,7 @@ public enum StatusEnum {
     PENDING,
     PROCESSING,
     COMPLETED,
+    DEGRADED,
+    FAILED,
     CANCELLED,
 }

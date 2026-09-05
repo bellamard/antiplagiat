@@ -65,6 +65,9 @@ public class PythonPlagiarismDetector implements PlagiarismDetector {
     @Value("${analysis.pg.chunk-overlap-sentences:1}")
     private int chunkOverlapSentences;
 
+    @Value("${analysis.pg.query-k:5}")
+    private int queryK;
+
     @Value("${analysis.ocr.min-text-length:80}")
     private int ocrMinTextLength;
 
@@ -73,6 +76,9 @@ public class PythonPlagiarismDetector implements PlagiarismDetector {
 
     @Value("${analysis.ocr.workers:4}")
     private int ocrWorkers;
+
+    @Value("${analysis.ocr.languages:fra+lin+swa+eng,fra+eng,fra,eng}")
+    private String ocrLanguages;
 
     @Value("${analysis.text.max-chars:500000}")
     private int maxExtractedTextChars;
@@ -342,13 +348,17 @@ public class PythonPlagiarismDetector implements PlagiarismDetector {
             boolean shouldRunOcrFallback = isImage || (isPdfDocument(document) && text.trim().length() < ocrMinTextLength);
 
             if (isImage) {
-                cmd.addAll(Arrays.asList("--image", analysisFilePath.toString()));
+                cmd.addAll(Arrays.asList(
+                        "--image", analysisFilePath.toString(),
+                        "--ocr-languages", ocrLanguages
+                ));
             } else if (shouldRunOcrFallback) {
                 cmd.addAll(Arrays.asList(
                         "--file", analysisFilePath.toString(),
                         "--ocr",
                         "--ocr-max-pages", Integer.toString(Math.max(1, ocrMaxPages)),
-                        "--ocr-workers", Integer.toString(Math.max(1, ocrWorkers))
+                        "--ocr-workers", Integer.toString(Math.max(1, ocrWorkers)),
+                        "--ocr-languages", ocrLanguages
                 ));
             } else {
                 // send text via stdin; nothing to add to cmd for text input
@@ -357,6 +367,8 @@ public class PythonPlagiarismDetector implements PlagiarismDetector {
             // pgvector args if configured
             if (pgEnabled && pgUri != null && !pgUri.isBlank() && pgTable != null && !pgTable.isBlank()) {
                 cmd.addAll(Arrays.asList("--pg-uri", pgUri, "--pg-table", pgTable, "--store-doc", document.getId().toString()));
+                cmd.addAll(Arrays.asList("--current-doc", document.getId().toString()));
+                cmd.addAll(Arrays.asList("--query-k", Integer.toString(Math.max(1, queryK))));
                 cmd.addAll(Arrays.asList("--chunk-max-chars", Integer.toString(chunkMaxChars)));
                 cmd.addAll(Arrays.asList("--chunk-overlap-sentences", Integer.toString(chunkOverlapSentences)));
             }
@@ -369,12 +381,15 @@ public class PythonPlagiarismDetector implements PlagiarismDetector {
             logger.debug("Command: {}", String.join(" ", cmd));
             ProcessBuilder pb = new ProcessBuilder(cmd);
             Map<String, String> environment = pb.environment();
+            environment.putIfAbsent("PYTHONUTF8", "1");
+            environment.putIfAbsent("PYTHONIOENCODING", "utf-8");
             environment.putIfAbsent("HF_HUB_OFFLINE", "1");
             environment.putIfAbsent("TRANSFORMERS_OFFLINE", "1");
             environment.putIfAbsent("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True");
             environment.putIfAbsent("ANALYSIS_USE_PADDLEOCR", "false");
             environment.putIfAbsent("ANALYSIS_OCR_MAX_PAGES", Integer.toString(Math.max(1, ocrMaxPages)));
             environment.putIfAbsent("ANALYSIS_OCR_WORKERS", Integer.toString(Math.max(1, ocrWorkers)));
+            environment.putIfAbsent("ANALYSIS_OCR_LANGUAGES", ocrLanguages);
             Process p = pb.start();
             CompletableFuture<String> stdoutFuture = readProcessOutput(p.getInputStream());
             CompletableFuture<String> stderrFuture = readProcessOutput(p.getErrorStream());
@@ -412,7 +427,7 @@ public class PythonPlagiarismDetector implements PlagiarismDetector {
                 }
                 double overall = node.has("overallScore") ? node.get("overallScore").asDouble() : 0.0;
                 double ai = node.has("aiScore") ? node.get("aiScore").asDouble() : 0.0;
-                String details = node.has("details") ? node.get("details").toString() : null;
+                String details = node.toString();
                 logger.debug("Parsed analysis result overall={} ai={}", overall, ai);
                 return new AnalysisResult(overall, ai, details);
             } else {

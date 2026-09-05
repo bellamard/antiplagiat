@@ -5,6 +5,7 @@ import com.b2la.antiplagiat.dto.ReportResponseDTO;
 import com.b2la.antiplagiat.entites.AnalysisHistory;
 import com.b2la.antiplagiat.entites.Document;
 import com.b2la.antiplagiat.entites.Report;
+import com.b2la.antiplagiat.enumerote.StatusEnum;
 import com.b2la.antiplagiat.repository.AnalysisHistoryRepository;
 import com.b2la.antiplagiat.repository.DocumentsRespository;
 import com.b2la.antiplagiat.repository.ReportRepository;
@@ -40,6 +41,12 @@ public class ReportService {
     public ReportResponseDTO generateReport(ReportRequestDTO req, String username) {
         AnalysisHistory history = resolveAnalysis(req);
         if (!history.getUser().getUsername().equals(username) && !com.b2la.antiplagiat.util.SecurityUtils.isCurrentUserAdmin()) throw new SecurityException("Accès refusé");
+        if (history.getStatus().getLibelle() == StatusEnum.FAILED
+                || history.getStatus().getLibelle() == StatusEnum.PENDING
+                || history.getStatus().getLibelle() == StatusEnum.PROCESSING
+                || history.getStatus().getLibelle() == StatusEnum.CANCELLED) {
+            throw new IllegalStateException("Impossible de générer un rapport final pour une analyse " + history.getStatus().getLibelle());
+        }
 
         String content = buildReportContent(history);
 
@@ -79,6 +86,10 @@ public class ReportService {
             throw new IllegalArgumentException("analysisId ou documentId est obligatoire");
         }
 
+        if (req.analysisId() != null && req.documentId() != null) {
+            throw new IllegalArgumentException("Fournir analysisId ou documentId, pas les deux");
+        }
+
         if (req.analysisId() != null) {
             return historyRepository.findById(req.analysisId())
                     .orElseThrow(() -> new EntityNotFoundException("Analyse introuvable"));
@@ -101,6 +112,10 @@ public class ReportService {
         root.put("documentId", history.getDocument().getId().toString());
         root.put("documentName", history.getDocument().getName());
         root.put("documentBase64Present", hasBase64Content(history.getDocument()));
+        root.put("analysisStatus", history.getStatus().getLibelle().name());
+        root.put("startedAt", history.getStartedAt() == null ? null : history.getStartedAt().toString());
+        root.put("finishedAt", history.getFinishedAt() == null ? null : history.getFinishedAt().toString());
+        root.put("degraded", history.getStatus().getLibelle() == StatusEnum.DEGRADED);
         root.put("overallScore", history.getOverallScore());
         root.put("aiScore", history.getAiScore());
 

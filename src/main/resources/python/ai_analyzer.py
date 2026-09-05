@@ -36,11 +36,19 @@ import contextlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 
+for stream in (sys.stdin, sys.stdout, sys.stderr):
+    try:
+        stream.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 MAX_SENTENCES = 500
 DEFAULT_CHUNK_MAX_CHARS = 1200
 DEFAULT_CHUNK_OVERLAP_SENTENCES = 1
-DEFAULT_OCR_MAX_PAGES = int(os.getenv("ANALYSIS_OCR_MAX_PAGES", "200"))
-DEFAULT_OCR_WORKERS = int(os.getenv("ANALYSIS_OCR_WORKERS", "4"))
+DEFAULT_OCR_MAX_PAGES = int(os.getenv("ANALYSIS_OCR_MAX_PAGES", "50"))
+DEFAULT_OCR_WORKERS = int(os.getenv("ANALYSIS_OCR_WORKERS", "2"))
+DEFAULT_OCR_LANGUAGES = os.getenv("ANALYSIS_OCR_LANGUAGES", "fra+eng")
+DEFAULT_SEMANTIC_MATCH_THRESHOLD = float(os.getenv("ANALYSIS_SEMANTIC_MATCH_THRESHOLD", "0.78"))
 USE_PADDLEOCR = os.getenv("ANALYSIS_USE_PADDLEOCR", "false").lower() in ("1", "true", "yes")
 
 warnings.filterwarnings("ignore")
@@ -130,6 +138,27 @@ def clean_text(text: str) -> str:
     text = re.sub(r"\s+", " ", text)
     text = re.sub(r"[\x00-\x1f\x7f]+", "", text)
     return text.strip()
+
+
+def parse_ocr_languages(languages: str):
+    values = []
+    for candidate in str(languages or '').split(','):
+        candidate = candidate.strip()
+        if candidate and candidate not in values:
+            values.append(candidate)
+    for fallback in ('fra+eng', 'fra', 'eng'):
+        if fallback not in values:
+            values.append(fallback)
+    return values
+
+
+def paddle_language_from_tesseract(languages: str):
+    first = parse_ocr_languages(languages)[0].split('+')[0]
+    if first == 'fra':
+        return 'fr'
+    if first in ('eng', 'en'):
+        return 'en'
+    return 'fr'
 
 
 def split_sentences(text: str):
@@ -282,13 +311,13 @@ def score_from_findings(num_sentences:int, fingerprint_pairs, lexical_pairs, sem
     if semantic_info.get('avg') is not None:
         sem_score = int(semantic_info['avg'] * 100)
     ai_score = min(100, ai_token_count * 25)
-    overall = int(min(100, fp_score * 0.4 + lex_score * 0.2 + sem_score * 0.3 + ai_score * 0.1))
+    overall = int(min(100, fp_score * 0.45 + lex_score * 0.25 + sem_score * 0.3))
     return overall, ai_score
 
 
 # === OCR helpers ===
 
-def ocr_image(path_or_bytes):
+def ocr_image(path_or_bytes, languages=DEFAULT_OCR_LANGUAGES):
     """Return extracted text or empty string."""
     # try pytesseract
     if HAS_TESSERACT and Image is not None:
@@ -298,15 +327,21 @@ def ocr_image(path_or_bytes):
                 img = Image.open(BytesIO(path_or_bytes))
             else:
                 img = Image.open(path_or_bytes)
-            text = pytesseract.image_to_string(img)
-            return text or ''
         except Exception:
-            pass
+            img = None
+        if img is not None:
+            for language in parse_ocr_languages(languages):
+                try:
+                    text = pytesseract.image_to_string(img, lang=language)
+                    if text and clean_text(text):
+                        return text
+                except Exception:
+                    continue
     # try PaddleOCR
     if USE_PADDLEOCR and HAS_PADDLEOCR:
         try:
             with contextlib.redirect_stdout(sys.stderr):
-                ocr = PaddleOCR(use_textline_orientation=True, lang='en')
+                ocr = PaddleOCR(use_textline_orientation=True, lang=paddle_language_from_tesseract(languages))
             if isinstance(path_or_bytes, (bytes, bytearray)):
                 from io import BytesIO
                 img = Image.open(BytesIO(path_or_bytes))
@@ -335,20 +370,20 @@ def ocr_image(path_or_bytes):
     return ''
 
 
-def _ocr_pdf_page(path, page_index, zoom):
+def _ocr_pdf_page(path, page_index, zoom, languages):
     doc = None
     try:
         doc = fitz.open(path)
         page = doc.load_page(page_index)
         pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
         image_bytes = pix.tobytes("png")
-        return page_index, ocr_image(image_bytes)
+        return page_index, ocr_image(image_bytes, languages=languages)
     finally:
         if doc is not None:
             doc.close()
 
 
-def ocr_pdf(path, max_pages=DEFAULT_OCR_MAX_PAGES, zoom=2.0, workers=DEFAULT_OCR_WORKERS):
+def ocr_pdf(path, max_pages=DEFAULT_OCR_MAX_PAGES, zoom=2.0, workers=DEFAULT_OCR_WORKERS, languages=DEFAULT_OCR_LANGUAGES):
     """OCR a scanned PDF by rendering pages with PyMuPDF, if available."""
     if not HAS_PYMUPDF:
         return ''
@@ -364,7 +399,7 @@ def ocr_pdf(path, max_pages=DEFAULT_OCR_MAX_PAGES, zoom=2.0, workers=DEFAULT_OCR
     try:
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [
-                executor.submit(_ocr_pdf_page, path, page_index, zoom)
+                executor.submit(_ocr_pdf_page, path, page_index, zoom, languages)
                 for page_index in range(total_pages)
             ]
             for future in as_completed(futures):
@@ -376,12 +411,12 @@ def ocr_pdf(path, max_pages=DEFAULT_OCR_MAX_PAGES, zoom=2.0, workers=DEFAULT_OCR
 
     return '\n'.join(page_texts[index] for index in sorted(page_texts))
 
-def ocr_file(path, max_pages=DEFAULT_OCR_MAX_PAGES, workers=DEFAULT_OCR_WORKERS):
+def ocr_file(path, max_pages=DEFAULT_OCR_MAX_PAGES, workers=DEFAULT_OCR_WORKERS, languages=DEFAULT_OCR_LANGUAGES):
     lowered = str(path).lower()
     if lowered.endswith('.pdf'):
-        return ocr_pdf(path, max_pages=max_pages, workers=workers)
+        return ocr_pdf(path, max_pages=max_pages, workers=workers, languages=languages)
     if lowered.endswith(('.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp', '.gif', '.webp')):
-        return ocr_image(path)
+        return ocr_image(path, languages=languages)
     return ''
 
 
@@ -407,13 +442,6 @@ def validate_sql_identifier(identifier):
 
 
 def _ensure_pgvector_chunk_table(cur, table, dim):
-    try:
-        cur.execute('CREATE EXTENSION IF NOT EXISTS vector')
-    except Exception:
-        # The DB user may not be allowed to create extensions. Keep going; the
-        # insert will fail clearly if pgvector is not installed.
-        pass
-
     cur.execute(f"""
         CREATE TABLE IF NOT EXISTS {table} (
             document_id TEXT NOT NULL,
@@ -428,7 +456,7 @@ def _ensure_pgvector_chunk_table(cur, table, dim):
     cur.execute(f"CREATE INDEX IF NOT EXISTS {table}_document_id_idx ON {table} (document_id)")
     cur.execute(f"CREATE INDEX IF NOT EXISTS {table}_chunk_hash_idx ON {table} (chunk_hash)")
     try:
-        cur.execute(f"CREATE INDEX IF NOT EXISTS {table}_embedding_hnsw_idx ON {table} USING hnsw (embedding vector_l2_ops)")
+        cur.execute(f"CREATE INDEX IF NOT EXISTS {table}_embedding_hnsw_idx ON {table} USING hnsw (embedding vector_cosine_ops)")
     except Exception:
         # Older pgvector versions may not support HNSW. Exact search still works.
         pass
@@ -497,32 +525,132 @@ def store_semantic_chunks_pg(pg_uri, table, doc_id, chunks, embeddings):
         conn.close()
         return {'ok': True, 'chunks': len(chunks), 'embedding_dim': dim}
     except Exception as e:
+        if 'does not exist' in str(e):
+            return {'ok': True, 'rows': []}
         return {'ok': False, 'error': str(e)}
 
 
-def query_similar_docs_pg(pg_uri, table, embedding, k=5):
+def query_similar_docs_pg(pg_uri, table, embedding, k=5, current_doc_id=None, min_similarity=DEFAULT_SEMANTIC_MATCH_THRESHOLD):
     if not HAS_PSYCOPG:
         return {'ok': False, 'error': 'psycopg/psycopg2 not available'}
     lit = _vec_literal(embedding)
     if lit is None:
         return {'ok': False, 'error': 'invalid embedding'}
+    conn = None
+    cur = None
     try:
         table = validate_sql_identifier(table)
         conn = psycopg2.connect(pg_uri)
         cur = conn.cursor()
-        # require that table has embedding column of vector type
-        cur.execute(f"""
-            SELECT document_id, chunk_index, chunk_text, embedding <-> %s::vector AS distance
-            FROM {table}
-            ORDER BY distance
-            LIMIT %s
-        """, (lit, k))
+        if current_doc_id:
+            cur.execute(f"""
+                SELECT document_id, chunk_index, chunk_text, embedding <=> %s::vector AS distance
+                FROM {table}
+                WHERE document_id <> %s
+                  AND (1 - (embedding <=> %s::vector)) >= %s
+                ORDER BY distance
+                LIMIT %s
+            """, (lit, current_doc_id, lit, min_similarity, k))
+        else:
+            cur.execute(f"""
+                SELECT document_id, chunk_index, chunk_text, embedding <=> %s::vector AS distance
+                FROM {table}
+                WHERE (1 - (embedding <=> %s::vector)) >= %s
+                ORDER BY distance
+                LIMIT %s
+            """, (lit, lit, min_similarity, k))
         rows = cur.fetchall()
-        cur.close()
-        conn.close()
-        return {'ok': True, 'rows': [{'document_id': r[0], 'chunk_index': r[1], 'text': r[2], 'distance': float(r[3])} for r in rows]}
+        return {'ok': True, 'rows': [
+            {
+                'document_id': r[0],
+                'chunk_index': r[1],
+                'text': r[2],
+                'distance': float(r[3]),
+                'similarity': max(0.0, min(1.0, 1.0 - float(r[3])))
+            } for r in rows
+        ]}
     except Exception as e:
         return {'ok': False, 'error': str(e)}
+    finally:
+        if cur is not None:
+            cur.close()
+        if conn is not None:
+            conn.close()
+
+
+def query_chunks_before_store_pg(pg_uri, table, doc_id, chunks, embeddings, k=5, min_similarity=DEFAULT_SEMANTIC_MATCH_THRESHOLD):
+    matches = []
+    grouped = {}
+    query_errors = []
+
+    for idx, embedding in enumerate(embeddings):
+        qres = query_similar_docs_pg(
+            pg_uri,
+            table,
+            embedding,
+            k=k,
+            current_doc_id=doc_id,
+            min_similarity=min_similarity
+        )
+        if not qres.get('ok'):
+            query_errors.append(qres.get('error', 'unknown pgvector query error'))
+            continue
+
+        for row in qres.get('rows', []):
+            match = {
+                'query_chunk_index': idx,
+                'query_text': chunks[idx][:300],
+                'source_document_id': row['document_id'],
+                'source_chunk_index': row['chunk_index'],
+                'source_text': row['text'][:300],
+                'semantic_similarity': row['similarity'],
+                'distance': row['distance']
+            }
+            matches.append(match)
+            grouped.setdefault(row['document_id'], {
+                'document_id': row['document_id'],
+                'match_count': 0,
+                'matched_query_chunks': set(),
+                'max_similarity': 0.0,
+                'avg_similarity_sum': 0.0
+            })
+            group = grouped[row['document_id']]
+            group['match_count'] += 1
+            group['matched_query_chunks'].add(idx)
+            group['max_similarity'] = max(group['max_similarity'], row['similarity'])
+            group['avg_similarity_sum'] += row['similarity']
+
+    grouped_sources = []
+    for group in grouped.values():
+        match_count = group['match_count']
+        grouped_sources.append({
+            'document_id': group['document_id'],
+            'match_count': match_count,
+            'matched_query_chunks': len(group['matched_query_chunks']),
+            'coverage': len(group['matched_query_chunks']) / max(1, len(chunks)),
+            'max_similarity': group['max_similarity'],
+            'avg_similarity': group['avg_similarity_sum'] / max(1, match_count)
+        })
+    grouped_sources.sort(key=lambda item: (item['coverage'], item['max_similarity']), reverse=True)
+
+    matched_chunks = {match['query_chunk_index'] for match in matches}
+    coverage = len(matched_chunks) / max(1, len(chunks))
+    avg_similarity = sum(match['semantic_similarity'] for match in matches) / len(matches) if matches else 0.0
+    external_score = int(round(min(1.0, coverage * 0.75 + avg_similarity * 0.25) * 100)) if matches else 0
+
+    return {
+        'ok': not query_errors,
+        'errors': query_errors,
+        'query_k': k,
+        'min_similarity': min_similarity,
+        'matches': matches[:50],
+        'source_documents': grouped_sources[:20],
+        'matched_chunks': len(matched_chunks),
+        'total_chunks': len(chunks),
+        'coverage': coverage,
+        'avg_similarity': avg_similarity,
+        'external_score': external_score
+    }
 
 
 # === high-level analyze ===
@@ -549,6 +677,8 @@ def analyze_text(text: str, model_name='all-MiniLM-L6-v2'):
         return (s[:200] + '...') if len(s) > 200 else s
 
     details = {
+        'status': 'COMPLETED',
+        'algorithm_version': 'external-pgvector-v1',
         'num_sentences': len(sentences),
         'total_sentences': len(all_sentences),
         'truncated': truncated,
@@ -558,11 +688,12 @@ def analyze_text(text: str, model_name='all-MiniLM-L6-v2'):
             'avg_similarity': semantic_info.get('avg'),
             'top_pairs': semantic_info.get('pairs')[:10] if isinstance(semantic_info.get('pairs'), list) else []
         },
-        'ai_token_count': ai_tokens,
-        'ai_score_method': 'explicit_keyword_indicator',
+        'ai_keyword_indicator': ai_score,
+        'ai_keyword_count': ai_tokens,
+        'ai_indicator_method': 'explicit_keyword_indicator',
         'limitations': [
             'Similarity is currently measured between passages of the same document.',
-            'The AI score is a keyword indicator and does not prove AI authorship.'
+            'The AI keyword indicator is not an AI-authorship detector.'
         ]
     }
 
@@ -585,12 +716,14 @@ if __name__ == '__main__':
             parser.add_argument('--pg-uri', help='Postgres URI (for pgvector)')
             parser.add_argument('--pg-table', help='Postgres table name for embeddings')
             parser.add_argument('--store-doc', help='Document id to store in pg table')
+            parser.add_argument('--current-doc', help='Current document id to exclude from pgvector results')
             parser.add_argument('--query-k', type=int, default=0, help='If >0, query pg table for k nearest chunks')
             parser.add_argument('--model', default='all-MiniLM-L6-v2', help='SentenceTransformer model')
             parser.add_argument('--chunk-max-chars', type=int, default=DEFAULT_CHUNK_MAX_CHARS, help='Maximum characters per semantic chunk')
             parser.add_argument('--chunk-overlap-sentences', type=int, default=DEFAULT_CHUNK_OVERLAP_SENTENCES, help='Sentence overlap between semantic chunks')
             parser.add_argument('--ocr-max-pages', type=int, default=DEFAULT_OCR_MAX_PAGES, help='Maximum PDF pages to OCR')
             parser.add_argument('--ocr-workers', type=int, default=DEFAULT_OCR_WORKERS, help='Parallel OCR workers for PDF pages')
+            parser.add_argument('--ocr-languages', default=DEFAULT_OCR_LANGUAGES, help='Comma-separated Tesseract language priorities, e.g. fra+lin+swa+eng,fra+eng,fra,eng')
             args = parser.parse_args()
 
             body = ''
@@ -604,7 +737,7 @@ if __name__ == '__main__':
             if args.text:
                 text = args.text
             elif args.image:
-                ocr_text = ocr_image(args.image)
+                ocr_text = ocr_image(args.image, languages=args.ocr_languages)
                 text = ocr_text
             elif args.file and args.ocr:
                 base_text = ''
@@ -617,7 +750,8 @@ if __name__ == '__main__':
                 ocr_text = ocr_file(
                     args.file,
                     max_pages=max(1, args.ocr_max_pages),
-                    workers=max(1, args.ocr_workers)
+                    workers=max(1, args.ocr_workers),
+                    languages=args.ocr_languages
                 )
                 text = ocr_text if len(clean_text(ocr_text)) > len(clean_text(base_text)) else base_text
             elif body:
@@ -646,20 +780,48 @@ if __name__ == '__main__':
                             overlap_sentences=max(0, args.chunk_overlap_sentences)
                         )
                         embeddings = model.encode(chunks, convert_to_numpy=HAS_NUMPY)
+                        if args.query_k and args.query_k > 0:
+                            query_res = query_chunks_before_store_pg(
+                                args.pg_uri,
+                                args.pg_table,
+                                args.current_doc or args.store_doc,
+                                chunks,
+                                embeddings,
+                                k=max(1, args.query_k),
+                                min_similarity=DEFAULT_SEMANTIC_MATCH_THRESHOLD
+                            )
+                            result['pg_query'] = query_res
+                            result['overallScore'] = query_res.get('external_score', 0)
+                            result['details']['external_similarity'] = query_res
+                            result['details']['limitations'] = [
+                                'The plagiarism score is based on external source chunks already present in pgvector.',
+                                'Internal repeated passages are reported separately and are not treated as plagiarism evidence.'
+                            ]
+
                         store_res = store_semantic_chunks_pg(args.pg_uri, args.pg_table, args.store_doc, chunks, embeddings)
                         result['pg_store'] = store_res
                         result['details']['semantic_chunks'] = len(chunks)
+                        result['details']['pg_store'] = store_res
+                        if not store_res.get('ok'):
+                            result['details']['status'] = 'DEGRADED'
+                            result['details']['failedStep'] = 'pgvector'
+                            result['details']['errorMessage'] = store_res.get('error')
                     except Exception as e:
                         result['pg_store'] = {'ok': False, 'error': str(e)}
+                        result['details']['status'] = 'DEGRADED'
+                        result['details']['failedStep'] = 'pgvector'
+                        result['details']['errorMessage'] = str(e)
 
                 if args.pg_uri and args.pg_table and HAS_SBERT and args.query_k and args.query_k>0:
-                    try:
-                        model = load_sentence_model(args.model)
-                        qemb = model.encode([text], convert_to_numpy=HAS_NUMPY)[0]
-                        qres = query_similar_docs_pg(args.pg_uri, args.pg_table, qemb, k=args.query_k)
-                        result['pg_query'] = qres
-                    except Exception as e:
-                        result['pg_query'] = {'ok': False, 'error': str(e)}
+                    # This document-level query is kept for direct CLI use when --store-doc is absent.
+                    if not args.store_doc:
+                        try:
+                            model = load_sentence_model(args.model)
+                            qemb = model.encode([text], convert_to_numpy=HAS_NUMPY)[0]
+                            qres = query_similar_docs_pg(args.pg_uri, args.pg_table, qemb, k=args.query_k, current_doc_id=args.current_doc)
+                            result['pg_query'] = qres
+                        except Exception as e:
+                            result['pg_query'] = {'ok': False, 'error': str(e)}
 
         sys.stdout.write(json.dumps(result, ensure_ascii=True))
         sys.stdout.write("\n")

@@ -1,13 +1,17 @@
 package com.b2la.antiplagiat.integration;
 
+import com.b2la.antiplagiat.entites.AnalysisHistory;
 import com.b2la.antiplagiat.entites.Document;
 import com.b2la.antiplagiat.entites.Roles;
+import com.b2la.antiplagiat.entites.Status;
 import com.b2la.antiplagiat.entites.Users;
 import com.b2la.antiplagiat.enumerote.Role;
+import com.b2la.antiplagiat.enumerote.StatusEnum;
 import com.b2la.antiplagiat.repository.AnalysisHistoryRepository;
 import com.b2la.antiplagiat.repository.DocumentsRespository;
 import com.b2la.antiplagiat.repository.ReportRepository;
 import com.b2la.antiplagiat.repository.RolesRepository;
+import com.b2la.antiplagiat.repository.StatusRepository;
 import com.b2la.antiplagiat.repository.UsersRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,6 +53,9 @@ public class ReportIntegrationTest {
     @Autowired
     ReportRepository reportRepository;
 
+    @Autowired
+    StatusRepository statusRepository;
+
     final ObjectMapper mapper = new ObjectMapper();
 
     Roles adminRole;
@@ -63,6 +70,7 @@ public class ReportIntegrationTest {
         documentsRespository.deleteAll();
         usersRepository.deleteAll();
         rolesRepository.deleteAll();
+        statusRepository.deleteAll();
 
         adminRole = rolesRepository.save(Roles.builder().libelle(Role.ADMIN).build());
         studentRole = rolesRepository.save(Roles.builder().libelle(Role.STUDENT).build());
@@ -107,20 +115,8 @@ public class ReportIntegrationTest {
 
     @Test
     public void ownerCanGenerateReport() throws Exception {
-        // create analysis as owner via controller
         var doc = documentsRespository.findAll().get(0);
-        String body = mapper.writeValueAsString(java.util.Map.of("matriculation", doc.getMatriculation()));
-
-        var res = mockMvc.perform(post("/api/histories")
-                .with(user(owner.getUsername()).roles("STUDENT"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(body))
-                .andExpect(status().isCreated())
-                .andReturn();
-
-        // extract analysis id
-        String response = res.getResponse().getContentAsString();
-        String id = mapper.readTree(response).get("data").get("id").asText();
+        String id = createCompletedAnalysis(doc, owner).getId().toString();
 
         // generate report
         String reportBody = mapper.writeValueAsString(java.util.Map.of("analysisId", id));
@@ -134,16 +130,7 @@ public class ReportIntegrationTest {
     @Test
     public void otherCannotGenerateReport() throws Exception {
         var doc = documentsRespository.findAll().get(0);
-        // create analysis as owner
-        String body = mapper.writeValueAsString(java.util.Map.of("matriculation", doc.getMatriculation()));
-        var res = mockMvc.perform(post("/api/histories")
-                .with(user(owner.getUsername()).roles("STUDENT"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(body))
-                .andExpect(status().isCreated())
-                .andReturn();
-        String response = res.getResponse().getContentAsString();
-        String id = mapper.readTree(response).get("data").get("id").asText();
+        String id = createCompletedAnalysis(doc, owner).getId().toString();
 
         String reportBody = mapper.writeValueAsString(java.util.Map.of("analysisId", id));
         mockMvc.perform(post("/api/reports")
@@ -156,15 +143,7 @@ public class ReportIntegrationTest {
     @Test
     public void adminCanAccessAnyReport() throws Exception {
         var doc = documentsRespository.findAll().get(0);
-        String body = mapper.writeValueAsString(java.util.Map.of("matriculation", doc.getMatriculation()));
-        var res = mockMvc.perform(post("/api/histories")
-                .with(user(owner.getUsername()).roles("STUDENT"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(body))
-                .andExpect(status().isCreated())
-                .andReturn();
-        String response = res.getResponse().getContentAsString();
-        String id = mapper.readTree(response).get("data").get("id").asText();
+        String id = createCompletedAnalysis(doc, owner).getId().toString();
 
         String reportBody = mapper.writeValueAsString(java.util.Map.of("analysisId", id));
         // admin can generate
@@ -178,5 +157,17 @@ public class ReportIntegrationTest {
         mockMvc.perform(get("/api/reports")
                 .with(user("admin").roles("ADMIN")))
                 .andExpect(status().isOk());
+    }
+
+    private AnalysisHistory createCompletedAnalysis(Document document, Users user) {
+        Status completed = statusRepository.save(Status.builder().libelle(StatusEnum.COMPLETED).build());
+        return historyRepository.save(AnalysisHistory.builder()
+                .document(document)
+                .user(user)
+                .overallScore(12.5)
+                .aiScore(0.0)
+                .status(completed)
+                .details("{\"status\":\"COMPLETED\"}")
+                .build());
     }
 }

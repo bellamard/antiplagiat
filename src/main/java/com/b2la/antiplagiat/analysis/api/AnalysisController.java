@@ -43,10 +43,16 @@ public class AnalysisController {
         return new ApiResponse<>("success", toResponse(analysisService.getHistory(id, authentication.getName())));
     }
 
+    @PostMapping("/{id}/cancel")
+    public ApiResponse<AnalysisResponse> cancel(@PathVariable UUID id, Authentication authentication) {
+        return new ApiResponse<>("success", "Analyse annulée", toResponse(analysisService.cancelAnalysis(id, authentication.getName())));
+    }
+
     private AnalysisResponse toResponse(AnalysisView view) {
         return new AnalysisResponse(
                 view.id(), view.documentId(), view.documentName(), view.userId(), view.username(),
-                view.overallScore(), view.aiScore(), view.details(), view.createdAt()
+                view.overallScore(), view.aiScore(), view.status(), view.failedStep(), view.errorMessage(),
+                view.details(), view.startedAt(), view.finishedAt(), view.createdAt()
         );
     }
 }

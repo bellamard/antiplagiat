@@ -1,18 +1,11 @@
 package com.b2la.antiplagiat.service;
 
 import com.b2la.antiplagiat.dto.DocumentResponseDTO;
-import com.b2la.antiplagiat.analysis.domain.AnalysisResult;
-import com.b2la.antiplagiat.analysis.domain.PlagiarismDetector;
-import com.b2la.antiplagiat.entites.AnalysisHistory;
+import com.b2la.antiplagiat.analysis.application.AnalysisService;
+import com.b2la.antiplagiat.analysis.application.AnalysisView;
 import com.b2la.antiplagiat.entites.Document;
-import com.b2la.antiplagiat.entites.Scores;
-import com.b2la.antiplagiat.entites.Status;
 import com.b2la.antiplagiat.entites.Users;
-import com.b2la.antiplagiat.enumerote.StatusEnum;
-import com.b2la.antiplagiat.repository.AnalysisHistoryRepository;
 import com.b2la.antiplagiat.repository.DocumentsRespository;
-import com.b2la.antiplagiat.repository.ScoresRepository;
-import com.b2la.antiplagiat.repository.StatusRepository;
 import com.b2la.antiplagiat.repository.UsersRepository;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.transaction.Transactional;
@@ -52,29 +45,20 @@ public class DocumentService {
 
     private final DocumentsRespository documentsRespository;
     private final UsersRepository usersRepository;
-    private final PlagiarismDetector plagiarismDetector;
-    private final AnalysisHistoryRepository analysisHistoryRepository;
-    private final ScoresRepository scoresRepository;
-    private final StatusRepository statusRepository;
+    private final AnalysisService analysisService;
     private final Path storageDirectory;
     private final long maxDatabaseBase64FileSize;
 
     public DocumentService(
             DocumentsRespository documentsRespository,
             UsersRepository usersRepository,
-            PlagiarismDetector plagiarismDetector,
-            AnalysisHistoryRepository analysisHistoryRepository,
-            ScoresRepository scoresRepository,
-            StatusRepository statusRepository,
+            AnalysisService analysisService,
             @Value("${app.documents.storage-dir:uploads/documents}") String storageDirectory,
             @Value("${app.documents.database-content-max-size-bytes:0}") long maxDatabaseBase64FileSize
     ) {
         this.documentsRespository = documentsRespository;
         this.usersRepository = usersRepository;
-        this.plagiarismDetector = plagiarismDetector;
-        this.analysisHistoryRepository = analysisHistoryRepository;
-        this.scoresRepository = scoresRepository;
-        this.statusRepository = statusRepository;
+        this.analysisService = analysisService;
         this.storageDirectory = Paths.get(storageDirectory).toAbsolutePath().normalize();
         this.maxDatabaseBase64FileSize = maxDatabaseBase64FileSize;
     }
@@ -152,11 +136,9 @@ public class DocumentService {
                 .build();
 
         Document savedDocument = documentsRespository.save(document);
+        AnalysisView queuedAnalysis = analysisService.queueDocumentAnalysis(savedDocument.getId(), username);
 
-        AnalysisResult analysisResult = plagiarismDetector.analyze(savedDocument);
-        persistAnalysisResult(savedDocument, user, analysisResult);
-
-        return toResponse(savedDocument);
+        return toResponse(savedDocument, queuedAnalysis);
     }
 
     public List<DocumentResponseDTO> getDocuments(String username) {
@@ -294,7 +276,7 @@ public class DocumentService {
              GZIPOutputStream gzipOutputStream = new GZIPOutputStream(Base64.getEncoder().wrap(output))) {
             inputStream.transferTo(gzipOutputStream);
         }
-        return output.toString(java.nio.charset.StandardCharsets.ISO_8859_1);
+        return output.toString(java.nio.charset.StandardCharsets.UTF_8);
     }
 
     public byte[] getDocumentBytes(Document document) throws IOException {
@@ -354,40 +336,11 @@ public class DocumentService {
         }
     }
 
-    private void persistAnalysisResult(Document document, Users user, AnalysisResult result) {
-        AnalysisHistory history = AnalysisHistory.builder()
-                .document(document)
-                .user(user)
-                .overallScore(result.getOverallScore())
-                .aiScore(result.getAiScore())
-                .details(result.getDetails())
-                .build();
-        analysisHistoryRepository.save(history);
-
-        Status status = statusRepository.findByLibelle(StatusEnum.COMPLETED)
-                .orElseGet(() -> statusRepository.save(Status.builder().libelle(StatusEnum.COMPLETED).build()));
-
-        if (scoresRepository.existsByDocument(document)) {
-            scoresRepository.findFirstByDocumentOrderByCreatedAtDesc(document).ifPresent(score -> {
-                score.setOverallScore(result.getOverallScore());
-                score.setAiScore(result.getAiScore());
-                score.setStatus(status);
-                scoresRepository.save(score);
-            });
-            return;
-        }
-
-        Scores score = Scores.builder()
-                .document(document)
-                .user(user)
-                .overallScore(result.getOverallScore())
-                .aiScore(result.getAiScore())
-                .status(status)
-                .build();
-        scoresRepository.save(score);
+    private DocumentResponseDTO toResponse(Document document) {
+        return toResponse(document, null);
     }
 
-    private DocumentResponseDTO toResponse(Document document) {
+    private DocumentResponseDTO toResponse(Document document, AnalysisView analysis) {
         normalizeDownloadUrl(document);
 
         return new DocumentResponseDTO(
@@ -406,7 +359,9 @@ public class DocumentService {
                 document.getUrlFile(),
                 document.getOriginalFileName(),
                 document.getContentType(),
-                document.getFileSize()
+                document.getFileSize(),
+                analysis == null ? null : analysis.id(),
+                analysis == null ? null : analysis.status()
         );
     }
 
@@ -436,7 +391,9 @@ public class DocumentService {
                 expectedUrl,
                 document.originalFileName(),
                 document.contentType(),
-                document.fileSize()
+                document.fileSize(),
+                document.analysisId(),
+                document.analysisStatus()
         );
     }
 }
